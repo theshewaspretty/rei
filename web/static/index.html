@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Infra Scanner</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230ea5e9'/%3E%3Cpath d='M9 4h6v5H9zM3 15h6v5H3zM15 15h6v5h-6zM6 15v-2h12v2M12 13V9' fill='none' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!--
+    Visible text is not written in this file. Elements carry a translation key
+    (data-i18n = text, data-i18n-title = tooltip, data-i18n-placeholder = placeholder)
+    and app.js fills them from i18n.js in the selected language (ko / en / zh).
+  -->
+
+  <!-- Login -->
+  <div id="login" class="overlay" hidden>
+    <form id="login-form" class="login-card" autocomplete="off">
+      <div class="brand-logo lg"><svg class="ico" data-icon="network"></svg></div>
+      <h1>Infra Scanner</h1>
+      <p class="muted" data-i18n="login.prompt"></p>
+      <input id="login-password" type="password" data-i18n-placeholder="login.password" autocomplete="current-password" required>
+      <div id="login-error" class="form-error" hidden></div>
+      <button type="submit" class="btn primary wide" data-i18n="login.submit"></button>
+      <label class="select lang" data-i18n-title="lang.title">
+        <svg class="ico" data-icon="globe"></svg>
+        <select class="lang-select" data-i18n-title="lang.title"></select>
+      </label>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo"><svg class="ico" data-icon="network"></svg></div>
+        <div>
+          <div class="brand-title">Infra Scanner <span class="pill">Live Topology</span></div>
+          <div class="brand-sub" id="brand-sub"></div>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="tools">
+        <label class="select" data-i18n-title="window.title">
+          <span data-i18n="window.label"></span>
+          <select id="window-select">
+            <option value="1h" data-i18n="window.1h"></option>
+            <option value="6h" data-i18n="window.6h"></option>
+            <option value="24h" data-i18n="window.24h" selected></option>
+            <option value="7d" data-i18n="window.7d"></option>
+            <option value="30d" data-i18n="window.30d"></option>
+          </select>
+        </label>
+        <div class="toggle-group">
+          <button class="toggle on" id="tg-external" data-i18n="toggle.external" data-i18n-title="toggle.external.title"></button>
+          <button class="toggle on" id="tg-unmanaged" data-i18n="toggle.unmanaged" data-i18n-title="toggle.unmanaged.title"></button>
+          <button class="toggle on" id="tg-infra" data-i18n="toggle.infra" data-i18n-title="toggle.infra.title"></button>
+          <button class="toggle on" id="tg-labels" data-i18n="toggle.labels" data-i18n-title="toggle.labels.title"></button>
+          <button class="toggle on" id="tg-anim" data-i18n="toggle.anim" data-i18n-title="toggle.anim.title"></button>
+        </div>
+        <span class="sep"></span>
+        <button class="btn" id="btn-relayout" data-i18n-title="btn.relayout.title"><svg class="ico" data-icon="grid"></svg><span data-i18n="btn.relayout"></span></button>
+        <button class="btn" id="btn-png" data-i18n-title="btn.png.title"><svg class="ico" data-icon="image"></svg><span>PNG</span></button>
+        <button class="btn" id="btn-json" data-i18n-title="btn.json.title"><svg class="ico" data-icon="download"></svg><span>JSON</span></button>
+        <button class="btn primary" id="btn-install" data-i18n-title="btn.install"><svg class="ico" data-icon="plus"></svg><span data-i18n="btn.install"></span></button>
+        <span class="sep"></span>
+        <label class="select lang" data-i18n-title="lang.title">
+          <svg class="ico" data-icon="globe"></svg>
+          <select class="lang-select" data-i18n-title="lang.title"></select>
+        </label>
+        <button class="btn icon" id="btn-logout" data-i18n-title="btn.logout"><svg class="ico" data-icon="logout"></svg></button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- Server list -->
+      <aside class="sidebar">
+        <div class="search">
+          <svg class="ico" data-icon="search"></svg>
+          <input id="search" type="search" data-i18n-placeholder="search.placeholder" autocomplete="off">
+        </div>
+        <div class="host-list" id="host-list"></div>
+        <div class="sidebar-foot" id="sidebar-foot"></div>
+      </aside>
+
+      <!-- Topology canvas -->
+      <section class="viewport" id="viewport">
+        <div class="world" id="world">
+          <div id="zones"></div>
+          <svg id="edges" width="1" height="1"><defs id="edge-defs"></defs><g id="edge-paths"></g></svg>
+          <div id="labels"></div>
+          <div id="nodes"></div>
+        </div>
+
+        <div class="empty" id="empty" hidden>
+          <div class="empty-icon"><svg class="ico" data-icon="server"></svg></div>
+          <h2 data-i18n="empty.title"></h2>
+          <p data-i18n="empty.body"></p>
+          <button class="btn primary" id="btn-install-empty"><svg class="ico" data-icon="plus"></svg><span data-i18n="empty.btn"></span></button>
+        </div>
+
+        <div class="zoom">
+          <button class="btn icon" id="btn-zoom-out" data-i18n-title="zoom.out"><svg class="ico" data-icon="minus"></svg></button>
+          <span id="zoom-label">100%</span>
+          <button class="btn icon" id="btn-zoom-in" data-i18n-title="zoom.in"><svg class="ico" data-icon="plus"></svg></button>
+          <span class="sep"></span>
+          <button class="btn icon" id="btn-fit" data-i18n-title="zoom.fit"><svg class="ico" data-icon="fit"></svg></button>
+          <button class="btn icon" id="btn-refresh" data-i18n-title="zoom.refresh"><svg class="ico" data-icon="refresh"></svg></button>
+        </div>
+
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <!-- Detail panel -->
+      <aside class="inspector" id="inspector"></aside>
+    </main>
+  </div>
+
+  <!-- Agent install guide -->
+  <div id="modal" class="overlay" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 data-i18n="btn.install"></h2>
+        <button class="btn icon" id="btn-modal-close" data-i18n-title="modal.close"><svg class="ico" data-icon="x"></svg></button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="i18n.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

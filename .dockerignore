@@ -1,0 +1,9 @@
+.tools
+.git
+dist
+data
+downloads
+.env
+*.md
+test.html
+docker-compose.yml

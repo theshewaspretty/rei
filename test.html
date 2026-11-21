@@ -1,0 +1,2150 @@
+<!DOCTYPE html>
+<html lang="ko" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Designed to Scale — 로컬 vLLM & 서버 인프라 구성도 빌더</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Pretendard / Inter / JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Noto Sans KR"', 'Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            canvas: '#070b14',
+            panel: '#0d1322',
+            card: '#121a2f',
+            borderSubtle: '#1e293b',
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+    input, textarea, select {
+      user-select: text;
+    }
+
+    body {
+      background-color: #070b14;
+      color: #f8fafc;
+      overflow: hidden;
+      font-family: 'Noto Sans KR', 'Inter', sans-serif;
+    }
+
+    /* Dot Grid Background */
+    #canvas-viewport {
+      background-color: #070b14;
+      background-image: radial-gradient(#1e293b 1.25px, transparent 1.25px);
+      background-size: 24px 24px;
+      cursor: grab;
+    }
+    #canvas-viewport.panning {
+      cursor: grabbing;
+    }
+    #canvas-viewport.connecting {
+      cursor: crosshair;
+    }
+
+    /* Animated Packet Flow on SVG Path */
+    @keyframes dashFlow {
+      to {
+        stroke-dashoffset: -24;
+      }
+    }
+    .edge-flow-anim {
+      stroke-dasharray: 6 6;
+      animation: dashFlow 0.9s linear infinite;
+    }
+
+    /* Node Card Styling */
+    .arch-node {
+      position: absolute;
+      width: 240px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(12px);
+      border: 1.5px solid rgba(51, 65, 85, 0.75);
+      box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.03);
+      transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.08s ease;
+      cursor: move;
+      z-index: 20;
+    }
+    .arch-node:hover {
+      border-color: rgba(148, 163, 184, 0.65);
+      box-shadow: 0 18px 36px -10px rgba(0, 0, 0, 0.8), 0 0 20px -4px var(--node-glow, rgba(56, 189, 248, 0.25));
+    }
+    .arch-node.selected {
+      border-color: var(--node-accent, #38bdf8);
+      box-shadow: 0 0 0 2px var(--node-accent, #38bdf8), 0 20px 40px -10px rgba(0, 0, 0, 0.85), 0 0 28px -2px var(--node-glow, rgba(56, 189, 248, 0.4));
+      z-index: 30;
+    }
+
+    /* Group / Zone Container Node */
+    .arch-zone {
+      position: absolute;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.35);
+      border: 1.5px dashed rgba(100, 116, 139, 0.55);
+      z-index: 5;
+      cursor: move;
+      transition: border-color 0.18s ease, background-color 0.18s ease;
+    }
+    .arch-zone:hover {
+      border-color: rgba(148, 163, 184, 0.85);
+      background: rgba(15, 23, 42, 0.48);
+    }
+    .arch-zone.selected {
+      border-style: solid;
+      border-color: var(--node-accent, #818cf8);
+      box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.35);
+      z-index: 8;
+    }
+
+    /* Resize Handle for Zones */
+    .zone-resize-handle {
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.6;
+    }
+    .arch-zone:hover .zone-resize-handle,
+    .arch-zone.selected .zone-resize-handle {
+      opacity: 1;
+    }
+
+    /* 4 Connection Ports */
+    .port {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 9999px;
+      background: #0f172a;
+      border: 2.5px solid #64748b;
+      z-index: 40;
+      cursor: crosshair;
+      opacity: 0;
+      transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+    }
+    .arch-node:hover .port,
+    .arch-node.selected .port,
+    .connecting .port {
+      opacity: 1;
+    }
+    .port:hover {
+      transform: scale(1.35);
+      border-color: #38bdf8;
+      background: #38bdf8;
+      box-shadow: 0 0 10px #38bdf8;
+    }
+    .port-top    { top: -7px; left: 50%; margin-left: -7px; }
+    .port-right  { right: -7px; top: 50%; margin-top: -7px; }
+    .port-bottom { bottom: -7px; left: 50%; margin-left: -7px; }
+    .port-left   { left: -7px; top: 50%; margin-top: -7px; }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+
+    /* Edge Label Pill */
+    .edge-label-badge {
+      pointer-events: all;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .edge-label-badge:hover {
+      transform: scale(1.06);
+    }
+  </style>
+</head>
+<body class="h-screen w-screen flex flex-col overflow-hidden text-slate-100">
+
+  <!-- TOP TOOLBAR -->
+  <header class="h-14 bg-panel/95 backdrop-blur-md border-b border-slate-800/90 px-4 flex items-center justify-between z-50 shrink-0">
+    <!-- Brand & Title -->
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
+        <i data-lucide="network" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-sm font-bold tracking-tight text-white">Designed to Scale</h1>
+          <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/30">Infra Studio</span>
+        </div>
+        <p class="text-[11px] text-slate-400 hidden sm:block">로컬 vLLM (RTX 3070) &amp; 서버 텔레메트리 아키텍처 빌더</p>
+      </div>
+    </div>
+
+    <!-- Center Controls: Presets & Toggles -->
+    <div class="flex items-center gap-2">
+      <!-- Preset Switcher -->
+      <div class="relative flex items-center bg-slate-900/90 border border-slate-800 rounded-xl px-2.5 py-1.5">
+        <i data-lucide="layout-template" class="w-3.5 h-3.5 text-sky-400 mr-2 shrink-0"></i>
+        <select id="preset-select" class="bg-transparent text-xs font-medium text-slate-200 focus:outline-none cursor-pointer pr-2">
+          <option value="rtx3070_default" class="bg-slate-900">템플릿: RTX 3070 vLLM 기본 구성도</option>
+          <option value="multi_gpu_scale" class="bg-slate-900">템플릿: 멀티 GPU 수평 확장 구성도</option>
+          <option value="empty" class="bg-slate-900">빈 캔버스 (새로 시작)</option>
+        </select>
+      </div>
+
+      <div class="h-5 w-px bg-slate-800 mx-1 hidden md:block"></div>
+
+      <!-- Undo / Redo -->
+      <div class="hidden md:flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-0.5">
+        <button id="btn-undo" title="실행 취소 (Ctrl+Z)" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-35 transition">
+          <i data-lucide="undo-2" class="w-4 h-4"></i>
+        </button>
+        <button id="btn-redo" title="다시 실행 (Ctrl+Y)" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-35 transition">
+          <i data-lucide="redo-2" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Snap to Grid -->
+      <button id="btn-snap" title="그리드 스냅 켜기/끄기" class="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30 transition">
+        <i data-lucide="grid" class="w-3.5 h-3.5"></i>
+        <span>그리드 스냅</span>
+      </button>
+
+      <!-- Flow Animation Toggle -->
+      <button id="btn-flow" title="데이터 흐름 애니메이션 켜기/끄기" class="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 transition">
+        <i data-lucide="activity" class="w-3.5 h-3.5"></i>
+        <span>트래픽 흐름</span>
+      </button>
+    </div>
+
+    <!-- Right Actions: JSON Import/Export & PNG -->
+    <div class="flex items-center gap-2">
+      <button id="btn-import-json" title="JSON 불러오기" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition">
+        <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+        <span class="hidden sm:inline">불러오기</span>
+      </button>
+      <input type="file" id="file-import-input" accept=".json" class="hidden" />
+
+      <button id="btn-export-json" title="JSON으로 내보내기" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition">
+        <i data-lucide="file-json" class="w-3.5 h-3.5"></i>
+        <span class="hidden sm:inline">JSON</span>
+      </button>
+
+      <button id="btn-export-png" title="PNG 이미지로 저장" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white shadow-md shadow-sky-500/20 transition">
+        <i data-lucide="image-down" class="w-3.5 h-3.5"></i>
+        <span>PNG 저장</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN WORKSPACE -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- LEFT PALETTE SIDEBAR -->
+    <aside id="left-sidebar" class="w-64 bg-panel/95 border-r border-slate-800/90 flex flex-col shrink-0 z-40 transition-all">
+      <div class="p-3.5 border-b border-slate-800/80">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">인프라 컴포넌트</span>
+          <span class="text-[10px] text-slate-500">드래그 또는 클릭</span>
+        </div>
+        <div class="relative">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5"></i>
+          <input id="palette-search" type="text" placeholder="노드 검색 (예: vLLM, Agent...)" class="w-full bg-slate-900/90 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500/60" />
+        </div>
+      </div>
+
+      <div id="palette-list" class="flex-1 overflow-y-auto p-3 space-y-4">
+        <!-- Populated dynamically by JS -->
+      </div>
+
+      <!-- Quick Shortcut Tip -->
+      <div class="p-3 border-t border-slate-800/80 bg-slate-950/50 text-[11px] text-slate-400 space-y-1">
+        <div class="flex items-center gap-1.5 text-slate-300 font-medium">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-sky-400"></i>
+          <span>연결 &amp; 조작 팁</span>
+        </div>
+        <p>• 노드 테두리의 <span class="text-sky-400 font-semibold">파란 점(포트)</span>을 드래그해 다른 노드에 연결하세요.</p>
+        <p>• 빈 캔버스 드래그: 이동 / 휠: 확대·축소</p>
+      </div>
+    </aside>
+
+    <!-- CENTER INTERACTIVE CANVAS -->
+    <main id="canvas-viewport" class="flex-1 relative overflow-hidden">
+      <!-- Transformed World Layer -->
+      <div id="canvas-world" class="absolute top-0 left-0 origin-top-left" style="width: 4000px; height: 4000px; transform: translate(0px, 0px) scale(1);">
+        <!-- Zone Containers Layer -->
+        <div id="zones-layer" class="absolute inset-0 pointer-events-none"></div>
+
+        <!-- SVG Connections Layer -->
+        <svg id="edges-svg" class="absolute inset-0 w-full h-full pointer-events-none overflow-visible" style="z-index: 15;">
+          <defs>
+            <!-- Arrowhead markers for different colors -->
+            <marker id="arrow-sky" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#38bdf8" />
+            </marker>
+            <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#34d399" />
+            </marker>
+            <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#fbbf24" />
+            </marker>
+            <marker id="arrow-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#a78bfa" />
+            </marker>
+            <marker id="arrow-rose" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#fb7185" />
+            </marker>
+            <marker id="arrow-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#94a3b8" />
+            </marker>
+          </defs>
+          <g id="edges-group"></g>
+          <!-- Temporary preview wire when dragging from a port -->
+          <path id="temp-wire" d="" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-dasharray="6 4" class="hidden" />
+        </svg>
+
+        <!-- HTML Edge Labels Layer -->
+        <div id="edge-labels-layer" class="absolute inset-0 pointer-events-none" style="z-index: 25;"></div>
+
+        <!-- Nodes Layer -->
+        <div id="nodes-layer" class="absolute inset-0"></div>
+      </div>
+
+      <!-- Floating Bottom-Left Zoom & Fit Controls -->
+      <div class="absolute bottom-4 left-4 z-40 flex items-center gap-1.5 bg-panel/90 backdrop-blur-md border border-slate-800 rounded-2xl p-1.5 shadow-xl">
+        <button id="btn-zoom-out" title="축소" class="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="zoom-out" class="w-4 h-4"></i>
+        </button>
+        <span id="zoom-level-text" class="text-xs font-mono font-medium text-slate-300 px-2 min-w-[52px] text-center">100%</span>
+        <button id="btn-zoom-in" title="확대" class="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="zoom-in" class="w-4 h-4"></i>
+        </button>
+        <div class="h-4 w-px bg-slate-800 mx-0.5"></div>
+        <button id="btn-fit-view" title="화면에 맞추기" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="maximize-2" class="w-3.5 h-3.5 text-sky-400"></i>
+          <span>화면 맞춤</span>
+        </button>
+      </div>
+
+      <!-- Toast Notification Banner -->
+      <div id="toast-banner" class="pointer-events-none fixed bottom-5 left-1/2 -translate-x-1/2 z-50 opacity-0 translate-y-2 transition-all duration-200">
+        <div class="bg-slate-900/95 border border-sky-500/40 text-slate-100 text-xs font-medium px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2">
+          <i data-lucide="check-circle-2" class="w-4 h-4 text-sky-400"></i>
+          <span id="toast-message">알림</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- RIGHT INSPECTOR SIDEBAR -->
+    <aside id="right-inspector" class="w-80 bg-panel/95 border-l border-slate-800/90 flex flex-col shrink-0 z-40 overflow-y-auto">
+      <!-- Dynamic Content Injected by JS -->
+      <div id="inspector-content" class="p-4 flex-1 flex flex-col"></div>
+    </aside>
+
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. COMPONENT CATALOG & COLOR DEFINITIONS
+    // =========================================================================
+    const ACCENT_PALETTE = {
+      sky:     { hex: '#38bdf8', glow: 'rgba(56, 189, 248, 0.32)',  badgeBg: 'rgba(56, 189, 248, 0.14)',  label: '스카이 블루 (AI/연산)' },
+      emerald: { hex: '#34d399', glow: 'rgba(52, 211, 153, 0.32)',  badgeBg: 'rgba(52, 211, 153, 0.14)',  label: '에메랄드 (에이전트/수집)' },
+      amber:   { hex: '#fbbf24', glow: 'rgba(251, 191, 36, 0.32)',  badgeBg: 'rgba(251, 191, 36, 0.14)',  label: '앰버 (큐/스트리밍)' },
+      purple:  { hex: '#a78bfa', glow: 'rgba(167, 139, 250, 0.32)', badgeBg: 'rgba(167, 139, 250, 0.14)', label: '퍼플 (저장/관제)' },
+      rose:    { hex: '#fb7185', glow: 'rgba(251, 113, 133, 0.32)', badgeBg: 'rgba(251, 113, 133, 0.14)', label: '로즈 (보안/방화벽)' },
+      slate:   { hex: '#94a3b8', glow: 'rgba(148, 163, 184, 0.25)', badgeBg: 'rgba(148, 163, 184, 0.14)', label: '슬레이트 (일반 서버)' },
+    };
+
+    const NODE_TEMPLATES = [
+      {
+        category: 'AI & 로컬 추론 엔진',
+        items: [
+          {
+            type: 'vllm_node',
+            title: 'RTX 3070 PC (vLLM)',
+            subtitle: 'Local LLM Inference Engine',
+            icon: 'cpu',
+            accent: 'sky',
+            tags: ['VRAM 8GB', 'AWQ 4-bit', 'Port 8000'],
+            description: '로컬 RTX 3070 GPU에서 vLLM 엔진을 구동하여 수집된 이상 로그 및 서버 상태를 요약·분석합니다.'
+          },
+          {
+            type: 'gpu_worker',
+            title: 'GPU Worker 노드',
+            subtitle: 'Scale-out vLLM Replica',
+            icon: 'zap',
+            accent: 'sky',
+            tags: ['vLLM Worker', 'OpenAI API', 'Auto-Scale'],
+            description: '부하 증가 시 큐 뒤에 수평 확장(Scale-out)하여 추가 투입되는 GPU 추론 워커입니다.'
+          },
+          {
+            type: 'orchestrator',
+            title: 'AI 분석 오케스트레이터',
+            subtitle: 'Prompt & Triage Worker',
+            icon: 'bot',
+            accent: 'sky',
+            tags: ['Python Worker', 'Log Triage', 'RAG/Context'],
+            description: '큐에서 이벤트를 꺼내 프롬프트를 구성하고 vLLM API 호출 및 결과 파싱을 담당합니다.'
+          }
+        ]
+      },
+      {
+        category: '대상 서버 & 에이전트',
+        items: [
+          {
+            type: 'target_server',
+            title: 'Target Server (App/DB)',
+            subtitle: 'Production Workload Host',
+            icon: 'server',
+            accent: 'slate',
+            tags: ['Linux', 'East-West Traffic', 'Systemd'],
+            description: '모니터링 대상 운영 서버입니다. 다른 서버와 REST/gRPC/DB 프로토콜로 통신합니다.'
+          },
+          {
+            type: 'telemetry_agent',
+            title: 'Telemetry Agent',
+            subtitle: 'Lightweight Collector Daemon',
+            icon: 'radio',
+            accent: 'emerald',
+            tags: ['Go / Python', 'Metrics + Logs', 'Net Flow'],
+            description: '각 서버에 배포되어 CPU/메모리, 에러 로그, 소켓 연결(서버 간 통신 맵)을 수집·전송합니다.'
+          },
+          {
+            type: 'k8s_cluster',
+            title: 'Kubernetes 클러스터',
+            subtitle: 'DaemonSet Agent Pool',
+            icon: 'boxes',
+            accent: 'emerald',
+            tags: ['DaemonSet', 'eBPF Flow', 'Pod Logs'],
+            description: '컨테이너 환경에서 노드별 DaemonSet 에이전트로 파드 상태와 서비스 메시 통신을 수집합니다.'
+          }
+        ]
+      },
+      {
+        category: '수집 파이프라인 & 큐',
+        items: [
+          {
+            type: 'ingestion_gw',
+            title: 'Ingestion / API Gateway',
+            subtitle: 'Stateless Collector & Router',
+            icon: 'shield-check',
+            accent: 'emerald',
+            tags: ['Vector / FastAPI', 'TLS / mTLS', 'Filter'],
+            description: '에이전트 데이터를 수신해 인증·필터링 후 일반 메트릭과 AI 분석용 이벤트를 분리 라우팅합니다.'
+          },
+          {
+            type: 'message_queue',
+            title: 'Message Queue (Redis/MQ)',
+            subtitle: 'Async Buffer & Backpressure',
+            icon: 'layers',
+            accent: 'amber',
+            tags: ['Redis Streams', 'Burst Buffer', 'Retry'],
+            description: '트래픽 폭주 시 RTX 3070 단일 GPU 병목을 방지하기 위해 이벤트를 버퍼링하는 비동기 큐입니다.'
+          },
+          {
+            type: 'load_balancer',
+            title: 'Internal Load Balancer',
+            subtitle: 'L4 / L7 Traffic Distributor',
+            icon: 'git-fork',
+            accent: 'amber',
+            tags: ['Nginx / Envoy', 'Health Check'],
+            description: '다수의 수집기 또는 다중 vLLM 워커 간 트래픽을 균등 분산합니다.'
+          }
+        ]
+      },
+      {
+        category: '저장소 · 관제 · 네트워크 영역',
+        items: [
+          {
+            type: 'tsdb',
+            title: 'Time-Series & Log DB',
+            subtitle: 'Metrics, Topology & Reports',
+            icon: 'database',
+            accent: 'purple',
+            tags: ['VictoriaMetrics', 'Loki / ClickHouse'],
+            description: '시계열 메트릭, 서버 간 통신 토폴로지 데이터, vLLM이 생성한 장애 분석 리포트를 저장합니다.'
+          },
+          {
+            type: 'dashboard',
+            title: 'Grafana / 관제 대시보드',
+            subtitle: 'Topology Map & Alert UI',
+            icon: 'bar-chart-3',
+            accent: 'purple',
+            tags: ['Grafana', 'Service Map', 'Webhook'],
+            description: '서버 간 연결 구조도와 AI 장애 원인 요약 리포트를 시각화하고 Slack/Teams 알림을 발송합니다.'
+          },
+          {
+            type: 'zone_group',
+            isZone: true,
+            title: 'VPC / 네트워크 보안 영역',
+            subtitle: 'Logical Boundary / Subnet',
+            icon: 'square-dashed-bottom',
+            accent: 'rose',
+            tags: ['Private Subnet', 'Firewall'],
+            description: '서버군, 수집 계층, 로컬 GPU 존 등 논리적 네트워크 경계를 묶어 표시하는 컨테이너 영역입니다.'
+          }
+        ]
+      }
+    ];
+
+    // =========================================================================
+    // 2. PRESET ARCHITECTURES
+    // =========================================================================
+    function getPresetData(presetName) {
+      if (presetName === 'empty') {
+        return {
+          nodes: [],
+          edges: [],
+          viewport: { x: 120, y: 80, scale: 1 }
+        };
+      }
+
+      if (presetName === 'multi_gpu_scale') {
+        return {
+          viewport: { x: 40, y: 40, scale: 0.85 },
+          nodes: [
+            {
+              id: 'z-prod', isZone: true, x: 40, y: 40, width: 320, height: 560,
+              title: '1. 운영 서버 존 (Target Fleet)', subtitle: 'East-West Server Mesh',
+              icon: 'server', accent: 'slate', tags: ['VPC-Prod'], description: '에이전트가 배포된 다수의 운영 서버 영역'
+            },
+            {
+              id: 'z-gpu', isZone: true, x: 1030, y: 40, width: 330, height: 560,
+              title: '3. 확장형 로컬 GPU 클러스터', subtitle: 'Horizontal Scale-Out Pool',
+              icon: 'cpu', accent: 'sky', tags: ['Multi-GPU'], description: '큐 부하에 따라 GPU 노드를 수평 확장하는 추론 풀'
+            },
+            {
+              id: 'n-srv1', x: 80, y: 110,
+              title: 'Web / API Server #1', subtitle: 'Workload + Agent',
+              icon: 'server', accent: 'emerald', tags: ['Go Agent', 'gRPC/REST'],
+              description: '외부 요청 처리 및 내부 마이크로서비스와 통신하는 서버'
+            },
+            {
+              id: 'n-srv2', x: 80, y: 280,
+              title: 'Core Worker Server #2', subtitle: 'Workload + Agent',
+              icon: 'server', accent: 'emerald', tags: ['Go Agent', 'eBPF Flow'],
+              description: '비동기 작업 처리 및 DB/캐시와 통신하는 서버'
+            },
+            {
+              id: 'n-db1', x: 80, y: 450,
+              title: 'Primary DB Server #3', subtitle: 'Database + Agent',
+              icon: 'database', accent: 'slate', tags: ['PostgreSQL', 'Agent'],
+              description: '핵심 데이터 저장소 및 복제 트래픽 모니터링 대상'
+            },
+            {
+              id: 'n-ing', x: 430, y: 200,
+              title: 'Ingestion Cluster (HA)', subtitle: 'Vector + FastAPI Gateway',
+              icon: 'shield-check', accent: 'emerald', tags: ['mTLS', 'Rule Filter'],
+              description: '에이전트 트래픽 수신, 서버 통신 토폴로지 추출 및 이상 이벤트 필터링'
+            },
+            {
+              id: 'n-mq', x: 730, y: 200,
+              title: 'Message Queue (Kafka/Redis)', subtitle: 'Partitioned Event Stream',
+              icon: 'layers', accent: 'amber', tags: ['Backpressure', 'Consumer Group'],
+              description: '다중 GPU 워커가 병렬로 이벤트를 소비할 수 있도록 파티셔닝된 큐'
+            },
+            {
+              id: 'n-gpu1', x: 1070, y: 110,
+              title: 'Node #1: RTX 3070 (vLLM)', subtitle: 'Primary Local GPU PC',
+              icon: 'cpu', accent: 'sky', tags: ['VRAM 8GB', 'Qwen2.5-7B-AWQ'],
+              description: '기존 보유 RTX 3070 PC에서 구동되는 기본 vLLM 워커 노드'
+            },
+            {
+              id: 'n-gpu2', x: 1070, y: 280,
+              title: 'Node #2: RTX 4070/3090 (vLLM)', subtitle: 'Scale-out GPU Worker #2',
+              icon: 'zap', accent: 'sky', tags: ['VRAM 16~24GB', 'vLLM Worker'],
+              description: '서버 수 증가 시 큐 뒤에 추가 투입된 확장 GPU 추론 노드'
+            },
+            {
+              id: 'n-gpu3', x: 1070, y: 450,
+              title: 'Node #3: GPU Worker #3', subtitle: 'Dedicated Deep Log Analyzer',
+              icon: 'bot', accent: 'sky', tags: ['Long Context', 'RCA Summary'],
+              description: '대용량 장애 트레이스 심층 분석 전담 워커'
+            },
+            {
+              id: 'n-tsdb', x: 430, y: 450,
+              title: 'TSDB & Topology Store', subtitle: 'Metrics + Service Graph',
+              icon: 'database', accent: 'purple', tags: ['ClickHouse', 'Topology'],
+              description: '전체 서버 메트릭, 통신 경로 맵 및 AI 분석 결과 저장'
+            },
+            {
+              id: 'n-dash', x: 730, y: 450,
+              title: 'Grafana & AI Incident UI', subtitle: 'Unified Observability',
+              icon: 'bar-chart-3', accent: 'purple', tags: ['Service Map', 'AI RCA'],
+              description: '실시간 서버 통신 구조도 및 AI 장애 원인 요약 대시보드'
+            }
+          ],
+          edges: [
+            { id: 'e1', source: 'n-srv1', sourcePort: 'bottom', target: 'n-srv2', targetPort: 'top', label: 'gRPC / HTTP2', color: 'slate', dashed: true, animated: true, bidir: true },
+            { id: 'e2', source: 'n-srv2', sourcePort: 'bottom', target: 'n-db1', targetPort: 'top', label: 'TCP 5432 (SQL)', color: 'slate', dashed: true, animated: true, bidir: false },
+            { id: 'e3', source: 'n-srv1', sourcePort: 'right', target: 'n-ing', targetPort: 'left', label: 'HTTPS / mTLS', color: 'emerald', dashed: false, animated: true, bidir: false },
+            { id: 'e4', source: 'n-srv2', sourcePort: 'right', target: 'n-ing', targetPort: 'left', label: 'Agent Push', color: 'emerald', dashed: false, animated: true, bidir: false },
+            { id: 'e5', source: 'n-db1', sourcePort: 'right', target: 'n-ing', targetPort: 'bottom', label: 'Metrics/Logs', color: 'emerald', dashed: false, animated: true, bidir: false },
+            { id: 'e6', source: 'n-ing', sourcePort: 'right', target: 'n-mq', targetPort: 'left', label: 'Anomaly Events', color: 'amber', dashed: false, animated: true, bidir: false },
+            { id: 'e7', source: 'n-ing', sourcePort: 'bottom', target: 'n-tsdb', targetPort: 'top', label: 'Raw Metrics & Map', color: 'purple', dashed: false, animated: true, bidir: false },
+            { id: 'e8', source: 'n-mq', sourcePort: 'right', target: 'n-gpu1', targetPort: 'left', label: 'Consume #1', color: 'sky', dashed: false, animated: true, bidir: false },
+            { id: 'e9', source: 'n-mq', sourcePort: 'right', target: 'n-gpu2', targetPort: 'left', label: 'Consume #2', color: 'sky', dashed: false, animated: true, bidir: false },
+            { id: 'e10', source: 'n-mq', sourcePort: 'right', target: 'n-gpu3', targetPort: 'left', label: 'Consume #3', color: 'sky', dashed: false, animated: true, bidir: false },
+            { id: 'e11', source: 'n-gpu2', sourcePort: 'bottom', target: 'n-dash', targetPort: 'right', label: 'AI Insights', color: 'purple', dashed: false, animated: true, bidir: false },
+            { id: 'e12', source: 'n-tsdb', sourcePort: 'right', target: 'n-dash', targetPort: 'left', label: 'PromQL / SQL', color: 'purple', dashed: false, animated: false, bidir: false }
+          ]
+        };
+      }
+
+      // Default: RTX 3070 vLLM Server Telemetry (Designed to Scale)
+      return {
+        viewport: { x: 45, y: 45, scale: 0.92 },
+        nodes: [
+          {
+            id: 'z-targets', isZone: true, x: 40, y: 40, width: 320, height: 520,
+            title: '1. 대상 서버군 (Target Servers)', subtitle: 'Agent Deployed & East-West Comm',
+            icon: 'server', accent: 'slate', tags: ['Production Fleet'],
+            description: '에이전트가 배포되어 메트릭·로그·서버 간 통신 경로를 수집하는 대상 서버 영역입니다.'
+          },
+          {
+            id: 'z-local-ai', isZone: true, x: 960, y: 40, width: 320, height: 320,
+            title: '3. 로컬 AI 추론 노드 (RTX 3070 PC)', subtitle: 'Scale-out Ready Worker Pool',
+            icon: 'cpu', accent: 'sky', tags: ['VRAM 8GB', 'vLLM'],
+            description: '보유 중인 RTX 3070 PC에서 vLLM을 구동하는 계층입니다. 추후 동일 큐 뒤에 GPU 노드를 추가할 수 있습니다.'
+          },
+          {
+            id: 'n-srv-a', x: 80, y: 115,
+            title: 'Target Server #1 (API)', subtitle: 'App + Telemetry Agent',
+            icon: 'server', accent: 'emerald', tags: ['Go/Python Agent', 'Net Flow'],
+            description: 'API 서버 및 경량 에이전트. 프로세스 상태, 에러 로그, 타 서버 소켓 연결을 수집합니다.'
+          },
+          {
+            id: 'n-srv-b', x: 80, y: 345,
+            title: 'Target Server #2 (DB/Worker)', subtitle: 'DB + Telemetry Agent',
+            icon: 'database', accent: 'emerald', tags: ['Agent v1.2', 'Socket/Port'],
+            description: '데이터베이스/배치 서버. Server #1과의 East-West 통신 레이턴시 및 시스템 리소스를 수집합니다.'
+          },
+          {
+            id: 'n-ing', x: 430, y: 140,
+            title: 'Ingestion / API Gateway', subtitle: 'Stateless Collector & Router',
+            icon: 'shield-check', accent: 'emerald', tags: ['Vector / FastAPI', 'HTTPS/gRPC'],
+            description: '에이전트 데이터를 수신해 정형 메트릭과 AI 분석용 이상 로그 이벤트를 분리 라우팅합니다.'
+          },
+          {
+            id: 'n-mq', x: 700, y: 140,
+            title: 'Message Queue (Redis/MQ)', subtitle: 'Async Buffer & Backpressure',
+            icon: 'layers', accent: 'amber', tags: ['Redis Streams', 'Burst Control'],
+            description: '트래픽 급증 시 RTX 3070 단일 GPU 병목을 방지하기 위해 이벤트를 순차 버퍼링합니다.'
+          },
+          {
+            id: 'n-rtx3070', x: 1000, y: 125,
+            title: 'RTX 3070 PC (vLLM)', subtitle: 'Local AI Log & Topology Analyzer',
+            icon: 'cpu', accent: 'sky', tags: ['VRAM 8GB', 'AWQ 4-bit', ':8000'],
+            description: 'vLLM 로컬 추론 서버. 이상 로그 원인 추정, 서버 간 통신 이상 탐지 및 자연어 요약을 수행합니다.'
+          },
+          {
+            id: 'n-tsdb', x: 430, y: 390,
+            title: 'Time-Series & Topology DB', subtitle: 'Metrics, Comm Map & AI Reports',
+            icon: 'database', accent: 'purple', tags: ['Metrics', 'Service Graph'],
+            description: '시계열 메트릭, 서버 간 연결 토폴로지 맵, vLLM 분석 리포트를 영구 저장합니다.'
+          },
+          {
+            id: 'n-grafana', x: 760, y: 390,
+            title: 'Grafana / 관제 대시보드', subtitle: 'Visual Topology & Alerting',
+            icon: 'bar-chart-3', accent: 'purple', tags: ['Service Map', 'AI Summary'],
+            description: '서버 간 통신 구조도와 AI 장애 분석 리포트를 시각화하는 관제 화면입니다.'
+          }
+        ],
+        edges: [
+          {
+            id: 'e-eastwest', source: 'n-srv-a', sourcePort: 'bottom', target: 'n-srv-b', targetPort: 'top',
+            label: 'East-West (gRPC / TCP)', color: 'rose', dashed: true, animated: true, bidir: true
+          },
+          {
+            id: 'e-agent1', source: 'n-srv-a', sourcePort: 'right', target: 'n-ing', targetPort: 'left',
+            label: 'HTTPS / gRPC Push', color: 'emerald', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-agent2', source: 'n-srv-b', sourcePort: 'right', target: 'n-ing', targetPort: 'bottom',
+            label: 'Agent Telemetry', color: 'emerald', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-to-mq', source: 'n-ing', sourcePort: 'right', target: 'n-mq', targetPort: 'left',
+            label: 'Anomaly / Log Events', color: 'amber', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-to-vllm', source: 'n-mq', sourcePort: 'right', target: 'n-rtx3070', targetPort: 'left',
+            label: 'Dequeue -> OpenAI API', color: 'sky', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-to-tsdb', source: 'n-ing', sourcePort: 'bottom', target: 'n-tsdb', targetPort: 'top',
+            label: 'Raw Metrics & Comm Map', color: 'purple', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-ai-save', source: 'n-rtx3070', sourcePort: 'bottom', target: 'n-grafana', targetPort: 'top',
+            label: 'AI Insights & RCA', color: 'sky', dashed: false, animated: true, bidir: false
+          },
+          {
+            id: 'e-db-ui', source: 'n-tsdb', sourcePort: 'right', target: 'n-grafana', targetPort: 'left',
+            label: 'Query / Topology', color: 'purple', dashed: false, animated: false, bidir: false
+          }
+        ]
+      };
+    }
+
+    // =========================================================================
+    // 3. APPLICATION STATE & HISTORY
+    // =========================================================================
+    const state = {
+      nodes: [],
+      edges: [],
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      viewport: { x: 45, y: 45, scale: 0.92 },
+      snapToGrid: true,
+      flowAnimated: true,
+      gridSize: 20,
+      history: [],
+      historyIndex: -1
+    };
+
+    const NODE_WIDTH = 240;
+    const NODE_HEIGHT = 122; // approximate visual height for port math
+
+    // DOM References
+    const viewportEl = document.getElementById('canvas-viewport');
+    const worldEl = document.getElementById('canvas-world');
+    const zonesLayerEl = document.getElementById('zones-layer');
+    const nodesLayerEl = document.getElementById('nodes-layer');
+    const edgesGroupEl = document.getElementById('edges-group');
+    const edgeLabelsLayerEl = document.getElementById('edge-labels-layer');
+    const tempWireEl = document.getElementById('temp-wire');
+    const inspectorContentEl = document.getElementById('inspector-content');
+    const zoomLevelTextEl = document.getElementById('zoom-level-text');
+
+    // =========================================================================
+    // 4. UTILITY FUNCTIONS
+    // =========================================================================
+    function generateId(prefix = 'item') {
+      return `${prefix}-${Math.random().toString(36).substring(2, 8)}`;
+    }
+
+    function snapValue(val) {
+      if (!state.snapToGrid) return Math.round(val);
+      return Math.round(val / state.gridSize) * state.gridSize;
+    }
+
+    function showToast(msg) {
+      const banner = document.getElementById('toast-banner');
+      const text = document.getElementById('toast-message');
+      text.textContent = msg;
+      banner.classList.remove('opacity-0', 'translate-y-2');
+      banner.classList.add('opacity-100', 'translate-y-0');
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => {
+        banner.classList.add('opacity-0', 'translate-y-2');
+        banner.classList.remove('opacity-100', 'translate-y-0');
+      }, 2400);
+    }
+
+    function pushHistory() {
+      const snapshot = JSON.stringify({
+        nodes: state.nodes,
+        edges: state.edges
+      });
+      if (state.historyIndex < state.history.length - 1) {
+        state.history = state.history.slice(0, state.historyIndex + 1);
+      }
+      if (state.history[state.historyIndex] !== snapshot) {
+        state.history.push(snapshot);
+        if (state.history.length > 40) state.history.shift();
+        state.historyIndex = state.history.length - 1;
+      }
+      updateHistoryButtons();
+    }
+
+    function undo() {
+      if (state.historyIndex <= 0) return;
+      state.historyIndex--;
+      const parsed = JSON.parse(state.history[state.historyIndex]);
+      state.nodes = parsed.nodes;
+      state.edges = parsed.edges;
+      state.selectedNodeId = null;
+      state.selectedEdgeId = null;
+      renderAll();
+      updateHistoryButtons();
+      showToast('실행 취소됨');
+    }
+
+    function redo() {
+      if (state.historyIndex >= state.history.length - 1) return;
+      state.historyIndex++;
+      const parsed = JSON.parse(state.history[state.historyIndex]);
+      state.nodes = parsed.nodes;
+      state.edges = parsed.edges;
+      state.selectedNodeId = null;
+      state.selectedEdgeId = null;
+      renderAll();
+      updateHistoryButtons();
+      showToast('다시 실행됨');
+    }
+
+    function updateHistoryButtons() {
+      document.getElementById('btn-undo').disabled = state.historyIndex <= 0;
+      document.getElementById('btn-redo').disabled = state.historyIndex >= state.history.length - 1;
+    }
+
+    // =========================================================================
+    // 5. PALETTE RENDERING & DRAG-FROM-PALETTE
+    // =========================================================================
+    function renderPalette(filterQuery = '') {
+      const container = document.getElementById('palette-list');
+      const q = filterQuery.trim().toLowerCase();
+      container.innerHTML = '';
+
+      NODE_TEMPLATES.forEach(group => {
+        const filteredItems = group.items.filter(item =>
+          item.title.toLowerCase().includes(q) ||
+          item.subtitle.toLowerCase().includes(q) ||
+          item.tags.some(t => t.toLowerCase().includes(q))
+        );
+        if (filteredItems.length === 0) return;
+
+        const section = document.createElement('div');
+        section.innerHTML = `
+          <div class="text-[11px] font-semibold text-slate-400 mb-2 px-1 flex items-center justify-between">
+            <span>${group.category}</span>
+          </div>
+          <div class="space-y-1.5"></div>
+        `;
+        const listEl = section.querySelector('div.space-y-1\\.5');
+
+        filteredItems.forEach(tpl => {
+          const accent = ACCENT_PALETTE[tpl.accent] || ACCENT_PALETTE.sky;
+          const card = document.createElement('div');
+          card.draggable = true;
+          card.className = 'group flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-900/75 hover:bg-slate-800/90 border border-slate-800/90 hover:border-slate-700 cursor-grab active:cursor-grabbing transition';
+          card.innerHTML = `
+            <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style="background: ${accent.badgeBg}; color: ${accent.hex};">
+              <i data-lucide="${tpl.icon}" class="w-4 h-4"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-semibold text-slate-200 truncate group-hover:text-white">${tpl.title}</div>
+              <div class="text-[10px] text-slate-400 truncate">${tpl.subtitle}</div>
+            </div>
+            <i data-lucide="plus" class="w-3.5 h-3.5 text-slate-600 group-hover:text-sky-400 shrink-0"></i>
+          `;
+
+          // HTML5 Drag start from sidebar
+          card.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('application/json', JSON.stringify(tpl));
+            e.dataTransfer.effectAllowed = 'copy';
+          });
+
+          // Click to spawn in center of current viewport
+          card.addEventListener('click', () => {
+            const rect = viewportEl.getBoundingClientRect();
+            const centerX = (rect.width / 2 - state.viewport.x) / state.viewport.scale - (tpl.isZone ? 160 : 120);
+            const centerY = (rect.height / 2 - state.viewport.y) / state.viewport.scale - (tpl.isZone ? 120 : 60);
+            addNodeFromTemplate(tpl, centerX, centerY);
+          });
+
+          listEl.appendChild(card);
+        });
+
+        container.appendChild(section);
+      });
+
+      lucide.createIcons();
+    }
+
+    function addNodeFromTemplate(tpl, x, y) {
+      const newNode = {
+        id: generateId(tpl.isZone ? 'zone' : 'node'),
+        isZone: !!tpl.isZone,
+        x: snapValue(Math.max(0, x)),
+        y: snapValue(Math.max(0, y)),
+        width: tpl.isZone ? 340 : undefined,
+        height: tpl.isZone ? 260 : undefined,
+        title: tpl.title,
+        subtitle: tpl.subtitle,
+        icon: tpl.icon,
+        accent: tpl.accent,
+        tags: [...tpl.tags],
+        description: tpl.description
+      };
+      state.nodes.push(newNode);
+      state.selectedNodeId = newNode.id;
+      state.selectedEdgeId = null;
+      pushHistory();
+      renderAll();
+      showToast(`"${newNode.title}" 추가됨`);
+    }
+
+    // Canvas Drop Handler
+    viewportEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+
+    viewportEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const raw = e.dataTransfer.getData('application/json');
+      if (!raw) return;
+      try {
+        const tpl = JSON.parse(raw);
+        const rect = viewportEl.getBoundingClientRect();
+        const worldX = (e.clientX - rect.left - state.viewport.x) / state.viewport.scale - (tpl.isZone ? 160 : 120);
+        const worldY = (e.clientY - rect.top - state.viewport.y) / state.viewport.scale - (tpl.isZone ? 40 : 55);
+        addNodeFromTemplate(tpl, worldX, worldY);
+      } catch (err) {
+        console.error(err);
+      }
+    });
+
+    // =========================================================================
+    // 6. NODE & ZONE RENDERING
+    // =========================================================================
+    function getNodeDimensions(node) {
+      if (node.isZone) {
+        return { width: node.width || 320, height: node.height || 260 };
+      }
+      const el = document.getElementById(`dom-${node.id}`);
+      if (el) {
+        return { width: el.offsetWidth || NODE_WIDTH, height: el.offsetHeight || NODE_HEIGHT };
+      }
+      return { width: NODE_WIDTH, height: NODE_HEIGHT };
+    }
+
+    function getPortCoords(node, portName) {
+      const { width, height } = getNodeDimensions(node);
+      switch (portName) {
+        case 'top':    return { x: node.x + width / 2, y: node.y };
+        case 'right':  return { x: node.x + width,     y: node.y + height / 2 };
+        case 'bottom': return { x: node.x + width / 2, y: node.y + height };
+        case 'left':   return { x: node.x,             y: node.y + height / 2 };
+        default:       return { x: node.x + width / 2, y: node.y + height / 2 };
+      }
+    }
+
+    function renderNodes() {
+      zonesLayerEl.innerHTML = '';
+      nodesLayerEl.innerHTML = '';
+
+      state.nodes.forEach(node => {
+        const accent = ACCENT_PALETTE[node.accent] || ACCENT_PALETTE.sky;
+        const isSelected = state.selectedNodeId === node.id;
+
+        if (node.isZone) {
+          // Render Zone Container
+          const zoneEl = document.createElement('div');
+          zoneEl.id = `dom-${node.id}`;
+          zoneEl.className = `arch-zone pointer-events-auto ${isSelected ? 'selected' : ''}`;
+          zoneEl.style.left = `${node.x}px`;
+          zoneEl.style.top = `${node.y}px`;
+          zoneEl.style.width = `${node.width || 320}px`;
+          zoneEl.style.height = `${node.height || 260}px`;
+          zoneEl.style.setProperty('--node-accent', accent.hex);
+
+          zoneEl.innerHTML = `
+            <div class="px-3.5 py-2.5 flex items-center justify-between border-b border-slate-700/40 rounded-t-2xl" style="background: linear-gradient(90deg, ${accent.badgeBg}, transparent);">
+              <div class="flex items-center gap-2 min-w-0">
+                <i data-lucide="${node.icon || 'square-dashed-bottom'}" class="w-4 h-4 shrink-0" style="color: ${accent.hex};"></i>
+                <div class="truncate">
+                  <div class="text-xs font-bold text-slate-100 truncate">${escapeHtml(node.title)}</div>
+                  <div class="text-[10px] text-slate-400 truncate">${escapeHtml(node.subtitle || '')}</div>
+                </div>
+              </div>
+              ${(node.tags && node.tags[0]) ? `<span class="text-[10px] font-mono px-2 py-0.5 rounded-md border border-slate-700/70 bg-slate-900/70 text-slate-300 shrink-0">${escapeHtml(node.tags[0])}</span>` : ''}
+            </div>
+            <div class="zone-resize-handle" title="크기 조절">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M11 1L1 11M11 6L6 11" stroke="${accent.hex}" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+            </div>
+          `;
+
+          // Drag Zone
+          zoneEl.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.zone-resize-handle')) return;
+            e.stopPropagation();
+            selectNode(node.id);
+            startNodeDrag(e, node);
+          });
+
+          // Resize Zone
+          const resizeHandle = zoneEl.querySelector('.zone-resize-handle');
+          resizeHandle.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            selectNode(node.id);
+            startZoneResize(e, node);
+          });
+
+          zonesLayerEl.appendChild(zoneEl);
+          return;
+        }
+
+        // Render Standard Infrastructure Node
+        const el = document.createElement('div');
+        el.id = `dom-${node.id}`;
+        el.className = `arch-node ${isSelected ? 'selected' : ''}`;
+        el.style.left = `${node.x}px`;
+        el.style.top = `${node.y}px`;
+        el.style.setProperty('--node-accent', accent.hex);
+        el.style.setProperty('--node-glow', accent.glow);
+
+        const tagsHtml = (node.tags || []).slice(0, 3).map(tag =>
+          `<span class="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-slate-900/90 text-slate-300 border border-slate-700/70">${escapeHtml(tag)}</span>`
+        ).join('');
+
+        el.innerHTML = `
+          <!-- Top Accent Bar -->
+          <div class="h-1 w-full rounded-t-[13px]" style="background: ${accent.hex};"></div>
+          <div class="p-3.5">
+            <div class="flex items-start gap-2.5">
+              <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5" style="background: ${accent.badgeBg}; color: ${accent.hex}; border: 1px solid ${accent.hex}33;">
+                <i data-lucide="${node.icon || 'server'}" class="w-4.5 h-4.5"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center justify-between gap-1">
+                  <h3 class="text-[13px] font-bold text-white truncate leading-snug">${escapeHtml(node.title)}</h3>
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: ${accent.hex}; box-shadow: 0 0 8px ${accent.hex};"></span>
+                </div>
+                <p class="text-[11px] text-slate-400 truncate mt-0.5">${escapeHtml(node.subtitle || '')}</p>
+              </div>
+            </div>
+            ${tagsHtml ? `<div class="flex flex-wrap gap-1 mt-3 pt-2.5 border-t border-slate-800/80">${tagsHtml}</div>` : ''}
+          </div>
+
+          <!-- 4 Connection Ports -->
+          <div class="port port-top" data-port="top" title="드래그하여 연결"></div>
+          <div class="port port-right" data-port="right" title="드래그하여 연결"></div>
+          <div class="port port-bottom" data-port="bottom" title="드래그하여 연결"></div>
+          <div class="port port-left" data-port="left" title="드래그하여 연결"></div>
+        `;
+
+        // Node Dragging
+        el.addEventListener('mousedown', (e) => {
+          if (e.target.classList.contains('port')) return;
+          e.stopPropagation();
+          selectNode(node.id);
+          startNodeDrag(e, node);
+        });
+
+        // Port Connection Dragging
+        el.querySelectorAll('.port').forEach(portEl => {
+          portEl.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            startPortConnection(e, node.id, portEl.dataset.port);
+          });
+
+          portEl.addEventListener('mouseup', (e) => {
+            if (activeConnection && activeConnection.sourceNodeId !== node.id) {
+              e.stopPropagation();
+              completePortConnection(node.id, portEl.dataset.port);
+            }
+          });
+        });
+
+        nodesLayerEl.appendChild(el);
+      });
+
+      lucide.createIcons();
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // =========================================================================
+    // 7. SVG EDGES & BEZIER CURVE RENDERING
+    // =========================================================================
+    function computeBezierPath(p1, port1, p2, port2) {
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const offset = Math.min(Math.max(dist * 0.42, 45), 160);
+
+      const dirVec = {
+        top:    { x: 0, y: -offset },
+        bottom: { x: 0, y: offset },
+        left:   { x: -offset, y: 0 },
+        right:  { x: offset, y: 0 }
+      };
+
+      const v1 = dirVec[port1] || { x: 0, y: 0 };
+      const v2 = dirVec[port2] || { x: 0, y: 0 };
+
+      const cp1 = { x: p1.x + v1.x, y: p1.y + v1.y };
+      const cp2 = { x: p2.x + v2.x, y: p2.y + v2.y };
+
+      const d = `M ${p1.x} ${p1.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${p2.x} ${p2.y}`;
+
+      // Cubic Bezier midpoint at t = 0.5
+      const midX = 0.125 * p1.x + 0.375 * cp1.x + 0.375 * cp2.x + 0.125 * p2.x;
+      const midY = 0.125 * p1.y + 0.375 * cp1.y + 0.375 * cp2.y + 0.125 * p2.y;
+
+      return { d, midX, midY };
+    }
+
+    function renderEdges() {
+      edgesGroupEl.innerHTML = '';
+      edgeLabelsLayerEl.innerHTML = '';
+
+      state.edges.forEach(edge => {
+        const srcNode = state.nodes.find(n => n.id === edge.source);
+        const tgtNode = state.nodes.find(n => n.id === edge.target);
+        if (!srcNode || !tgtNode) return;
+
+        const p1 = getPortCoords(srcNode, edge.sourcePort);
+        const p2 = getPortCoords(tgtNode, edge.targetPort);
+        const { d, midX, midY } = computeBezierPath(p1, edge.sourcePort, p2, edge.targetPort);
+
+        const accent = ACCENT_PALETTE[edge.color] || ACCENT_PALETTE.sky;
+        const isSelected = state.selectedEdgeId === edge.id;
+        const markerEnd = `url(#arrow-${edge.color || 'sky'})`;
+        const markerStart = edge.bidir ? `url(#arrow-${edge.color || 'sky'})` : '';
+
+        // Invisible wide hit area for easy clicking
+        const hitPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hitPath.setAttribute('d', d);
+        hitPath.setAttribute('fill', 'none');
+        hitPath.setAttribute('stroke', 'transparent');
+        hitPath.setAttribute('stroke-width', '16');
+        hitPath.style.pointerEvents = 'stroke';
+        hitPath.style.cursor = 'pointer';
+        hitPath.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          selectEdge(edge.id);
+        });
+
+        // Base Line
+        const basePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        basePath.setAttribute('d', d);
+        basePath.setAttribute('fill', 'none');
+        basePath.setAttribute('stroke', accent.hex);
+        basePath.setAttribute('stroke-width', isSelected ? '3' : '2');
+        basePath.setAttribute('stroke-opacity', isSelected ? '1' : '0.55');
+        if (edge.dashed) {
+          basePath.setAttribute('stroke-dasharray', '6 5');
+        }
+        basePath.setAttribute('marker-end', markerEnd);
+        if (markerStart) basePath.setAttribute('marker-start', markerStart);
+
+        edgesGroupEl.appendChild(basePath);
+
+        // Animated Flow Overlay
+        if (state.flowAnimated && edge.animated !== false) {
+          const flowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          flowPath.setAttribute('d', d);
+          flowPath.setAttribute('fill', 'none');
+          flowPath.setAttribute('stroke', '#ffffff');
+          flowPath.setAttribute('stroke-width', isSelected ? '2.5' : '1.8');
+          flowPath.setAttribute('stroke-opacity', '0.75');
+          flowPath.classList.add('edge-flow-anim');
+          edgesGroupEl.appendChild(flowPath);
+        }
+
+        edgesGroupEl.appendChild(hitPath);
+
+        // Protocol Label Pill at Midpoint
+        if (edge.label && edge.label.trim() !== '') {
+          const badge = document.createElement('div');
+          badge.className = 'edge-label-badge absolute -translate-x-1/2 -translate-y-1/2 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-medium whitespace-nowrap shadow-md';
+          badge.style.left = `${midX}px`;
+          badge.style.top = `${midY}px`;
+          badge.style.backgroundColor = isSelected ? accent.hex : '#0f172a';
+          badge.style.color = isSelected ? '#070b14' : '#e2e8f0';
+          badge.style.border = `1px solid ${isSelected ? '#ffffff' : accent.hex + '66'}`;
+          badge.textContent = edge.label;
+
+          badge.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            selectEdge(edge.id);
+          });
+
+          edgeLabelsLayerEl.appendChild(badge);
+        }
+      });
+    }
+
+    // =========================================================================
+    // 8. INTERACTIONS: NODE DRAG, ZONE RESIZE, PORT WIRING, PAN & ZOOM
+    // =========================================================================
+    let activeDrag = null;
+    let activeResize = null;
+    let activeConnection = null;
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+
+    function startNodeDrag(e, node) {
+      activeDrag = {
+        node,
+        startMouseX: e.clientX,
+        startMouseY: e.clientY,
+        origX: node.x,
+        origY: node.y,
+        moved: false
+      };
+    }
+
+    function startZoneResize(e, zoneNode) {
+      activeResize = {
+        node: zoneNode,
+        startMouseX: e.clientX,
+        startMouseY: e.clientY,
+        origW: zoneNode.width || 320,
+        origH: zoneNode.height || 260,
+        resized: false
+      };
+    }
+
+    function startPortConnection(e, sourceNodeId, sourcePort) {
+      const srcNode = state.nodes.find(n => n.id === sourceNodeId);
+      if (!srcNode) return;
+      const startPt = getPortCoords(srcNode, sourcePort);
+      activeConnection = {
+        sourceNodeId,
+        sourcePort,
+        startPt
+      };
+      viewportEl.classList.add('connecting');
+      tempWireEl.classList.remove('hidden');
+      tempWireEl.setAttribute('d', `M ${startPt.x} ${startPt.y} L ${startPt.x} ${startPt.y}`);
+    }
+
+    function completePortConnection(targetNodeId, targetPort) {
+      if (!activeConnection) return;
+      const { sourceNodeId, sourcePort } = activeConnection;
+
+      // Prevent duplicate exact edge
+      const exists = state.edges.some(
+        ed => ed.source === sourceNodeId && ed.target === targetNodeId && ed.sourcePort === sourcePort && ed.targetPort === targetPort
+      );
+
+      if (!exists && sourceNodeId !== targetNodeId) {
+        const srcNode = state.nodes.find(n => n.id === sourceNodeId);
+        const newEdge = {
+          id: generateId('edge'),
+          source: sourceNodeId,
+          sourcePort,
+          target: targetNodeId,
+          targetPort,
+          label: 'HTTPS / gRPC',
+          color: srcNode ? srcNode.accent : 'sky',
+          dashed: false,
+          animated: true,
+          bidir: false
+        };
+        state.edges.push(newEdge);
+        state.selectedEdgeId = newEdge.id;
+        state.selectedNodeId = null;
+        pushHistory();
+        showToast('노드 연결 완료');
+      }
+
+      cleanupConnection();
+      renderAll();
+    }
+
+    function cleanupConnection() {
+      activeConnection = null;
+      viewportEl.classList.remove('connecting');
+      tempWireEl.classList.add('hidden');
+    }
+
+    // Canvas Background Panning
+    viewportEl.addEventListener('mousedown', (e) => {
+      if (e.target === viewportEl || e.target === worldEl || e.target.id === 'edges-svg') {
+        deselectAll();
+        isPanning = true;
+        viewportEl.classList.add('panning');
+        panStart = {
+          x: e.clientX - state.viewport.x,
+          y: e.clientY - state.viewport.y
+        };
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      // 1. Dragging a Node or Zone
+      if (activeDrag) {
+        const dx = (e.clientX - activeDrag.startMouseX) / state.viewport.scale;
+        const dy = (e.clientY - activeDrag.startMouseY) / state.viewport.scale;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) activeDrag.moved = true;
+
+        activeDrag.node.x = snapValue(Math.max(0, activeDrag.origX + dx));
+        activeDrag.node.y = snapValue(Math.max(0, activeDrag.origY + dy));
+
+        const domEl = document.getElementById(`dom-${activeDrag.node.id}`);
+        if (domEl) {
+          domEl.style.left = `${activeDrag.node.x}px`;
+          domEl.style.top = `${activeDrag.node.y}px`;
+        }
+        renderEdges();
+        return;
+      }
+
+      // 2. Resizing a Zone
+      if (activeResize) {
+        const dx = (e.clientX - activeResize.startMouseX) / state.viewport.scale;
+        const dy = (e.clientY - activeResize.startMouseY) / state.viewport.scale;
+        activeResize.resized = true;
+        activeResize.node.width = snapValue(Math.max(220, activeResize.origW + dx));
+        activeResize.node.height = snapValue(Math.max(160, activeResize.origH + dy));
+
+        const domEl = document.getElementById(`dom-${activeResize.node.id}`);
+        if (domEl) {
+          domEl.style.width = `${activeResize.node.width}px`;
+          domEl.style.height = `${activeResize.node.height}px`;
+        }
+        return;
+      }
+
+      // 3. Drawing Connection Wire
+      if (activeConnection) {
+        const rect = viewportEl.getBoundingClientRect();
+        const mouseWorldX = (e.clientX - rect.left - state.viewport.x) / state.viewport.scale;
+        const mouseWorldY = (e.clientY - rect.top - state.viewport.y) / state.viewport.scale;
+        const { startPt, sourcePort } = activeConnection;
+        const { d } = computeBezierPath(startPt, sourcePort, { x: mouseWorldX, y: mouseWorldY }, 'left');
+        tempWireEl.setAttribute('d', d);
+        return;
+      }
+
+      // 4. Panning Viewport
+      if (isPanning) {
+        state.viewport.x = e.clientX - panStart.x;
+        state.viewport.y = e.clientY - panStart.y;
+        applyViewportTransform();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (activeDrag) {
+        if (activeDrag.moved) pushHistory();
+        activeDrag = null;
+      }
+      if (activeResize) {
+        if (activeResize.resized) pushHistory();
+        activeResize = null;
+      }
+      if (activeConnection) {
+        cleanupConnection();
+      }
+      if (isPanning) {
+        isPanning = false;
+        viewportEl.classList.remove('panning');
+      }
+    });
+
+    // Zoom with Mouse Wheel
+    viewportEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomIntensity = 0.08;
+      const delta = e.deltaY < 0 ? 1 + zoomIntensity : 1 - zoomIntensity;
+      const newScale = Math.min(2.0, Math.max(0.35, state.viewport.scale * delta));
+
+      const rect = viewportEl.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      state.viewport.x = mouseX - (mouseX - state.viewport.x) * (newScale / state.viewport.scale);
+      state.viewport.y = mouseY - (mouseY - state.viewport.y) * (newScale / state.viewport.scale);
+      state.viewport.scale = newScale;
+
+      applyViewportTransform();
+    }, { passive: false });
+
+    function applyViewportTransform() {
+      worldEl.style.transform = `translate(${state.viewport.x}px, ${state.viewport.y}px) scale(${state.viewport.scale})`;
+      zoomLevelTextEl.textContent = `${Math.round(state.viewport.scale * 100)}%`;
+      // Subtle dot grid parallax
+      viewportEl.style.backgroundPosition = `${state.viewport.x}px ${state.viewport.y}px`;
+      viewportEl.style.backgroundSize = `${24 * state.viewport.scale}px ${24 * state.viewport.scale}px`;
+    }
+
+    function fitViewToContent() {
+      if (state.nodes.length === 0) {
+        state.viewport = { x: 60, y: 60, scale: 1 };
+        applyViewportTransform();
+        return;
+      }
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      state.nodes.forEach(n => {
+        const { width, height } = getNodeDimensions(n);
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + width);
+        maxY = Math.max(maxY, n.y + height);
+      });
+
+      const rect = viewportEl.getBoundingClientRect();
+      const padding = 70;
+      const contentW = maxX - minX + padding * 2;
+      const contentH = maxY - minY + padding * 2;
+
+      const scaleX = rect.width / contentW;
+      const scaleY = rect.height / contentH;
+      const newScale = Math.min(1.15, Math.max(0.4, Math.min(scaleX, scaleY)));
+
+      state.viewport.scale = newScale;
+      state.viewport.x = (rect.width - (maxX - minX) * newScale) / 2 - minX * newScale;
+      state.viewport.y = (rect.height - (maxY - minY) * newScale) / 2 - minY * newScale;
+      applyViewportTransform();
+    }
+
+    // =========================================================================
+    // 9. SELECTION & RIGHT INSPECTOR PANEL
+    // =========================================================================
+    function selectNode(nodeId) {
+      state.selectedNodeId = nodeId;
+      state.selectedEdgeId = null;
+      renderAll();
+    }
+
+    function selectEdge(edgeId) {
+      state.selectedEdgeId = edgeId;
+      state.selectedNodeId = null;
+      renderAll();
+    }
+
+    function deselectAll() {
+      if (!state.selectedNodeId && !state.selectedEdgeId) return;
+      state.selectedNodeId = null;
+      state.selectedEdgeId = null;
+      renderAll();
+    }
+
+    function renderInspector() {
+      // Case 1: Node Selected
+      if (state.selectedNodeId) {
+        const node = state.nodes.find(n => n.id === state.selectedNodeId);
+        if (!node) return;
+
+        const colorOptionsHtml = Object.entries(ACCENT_PALETTE).map(([key, val]) => `
+          <button type="button" data-color="${key}"
+            class="color-swatch w-7 h-7 rounded-lg flex items-center justify-center border-2 transition ${node.accent === key ? 'border-white scale-110' : 'border-transparent opacity-75 hover:opacity-100'}"
+            style="background: ${val.hex};" title="${val.label}">
+            ${node.accent === key ? '<i data-lucide="check" class="w-3.5 h-3.5 text-slate-950 stroke-[3]"></i>' : ''}
+          </button>
+        `).join('');
+
+        inspectorContentEl.innerHTML = `
+          <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full" style="background: ${(ACCENT_PALETTE[node.accent] || ACCENT_PALETTE.sky).hex}"></span>
+              <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">${node.isZone ? '영역(Zone) 속성' : '노드 속성 편집'}</h2>
+            </div>
+            <button id="btn-close-inspector" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="space-y-4 flex-1">
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">노드 이름 (Title)</label>
+              <input id="inp-node-title" type="text" value="${escapeHtml(node.title)}"
+                class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-sky-500" />
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">역할 / 서브타이틀</label>
+              <input id="inp-node-subtitle" type="text" value="${escapeHtml(node.subtitle || '')}"
+                class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-sky-500" />
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">스펙 / 태그 (쉼표로 구분)</label>
+              <input id="inp-node-tags" type="text" value="${escapeHtml((node.tags || []).join(', '))}"
+                placeholder="예: VRAM 8GB, AWQ 4-bit, Port 8000"
+                class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-sky-300 focus:outline-none focus:border-sky-500" />
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">강조 색상 (Theme Accent)</label>
+              <div class="flex items-center gap-2 pt-0.5">
+                ${colorOptionsHtml}
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">아키텍처 메모 / 상세 설명</label>
+              <textarea id="inp-node-desc" rows="4"
+                class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs text-slate-300 leading-relaxed focus:outline-none focus:border-sky-500 resize-none">${escapeHtml(node.description || '')}</textarea>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 pt-1 text-[11px] font-mono text-slate-400">
+              <div class="bg-slate-900/70 border border-slate-800 rounded-xl px-3 py-2">X: <span class="text-slate-200">${node.x}px</span></div>
+              <div class="bg-slate-900/70 border border-slate-800 rounded-xl px-3 py-2">Y: <span class="text-slate-200">${node.y}px</span></div>
+            </div>
+          </div>
+
+          <div class="pt-4 mt-4 border-t border-slate-800 flex items-center gap-2">
+            <button id="btn-dup-node" class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 transition">
+              <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+              <span>복제</span>
+            </button>
+            <button id="btn-del-node" class="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 transition">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span>삭제</span>
+            </button>
+          </div>
+        `;
+
+        // Bind Node Inspector Inputs
+        document.getElementById('btn-close-inspector').onclick = deselectAll;
+
+        document.getElementById('inp-node-title').addEventListener('input', (e) => {
+          node.title = e.target.value;
+          renderNodes();
+        });
+        document.getElementById('inp-node-title').addEventListener('change', pushHistory);
+
+        document.getElementById('inp-node-subtitle').addEventListener('input', (e) => {
+          node.subtitle = e.target.value;
+          renderNodes();
+        });
+        document.getElementById('inp-node-subtitle').addEventListener('change', pushHistory);
+
+        document.getElementById('inp-node-tags').addEventListener('input', (e) => {
+          node.tags = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+          renderNodes();
+        });
+        document.getElementById('inp-node-tags').addEventListener('change', pushHistory);
+
+        document.getElementById('inp-node-desc').addEventListener('input', (e) => {
+          node.description = e.target.value;
+        });
+        document.getElementById('inp-node-desc').addEventListener('change', pushHistory);
+
+        inspectorContentEl.querySelectorAll('.color-swatch').forEach(btn => {
+          btn.addEventListener('click', () => {
+            node.accent = btn.dataset.color;
+            pushHistory();
+            renderAll();
+          });
+        });
+
+        document.getElementById('btn-dup-node').addEventListener('click', () => {
+          const copy = JSON.parse(JSON.stringify(node));
+          copy.id = generateId(node.isZone ? 'zone' : 'node');
+          copy.x += 40;
+          copy.y += 40;
+          copy.title += ' (복사본)';
+          state.nodes.push(copy);
+          state.selectedNodeId = copy.id;
+          pushHistory();
+          renderAll();
+          showToast('노드가 복제되었습니다');
+        });
+
+        document.getElementById('btn-del-node').addEventListener('click', () => {
+          deleteSelected();
+        });
+
+        lucide.createIcons();
+        return;
+      }
+
+      // Case 2: Edge Selected
+      if (state.selectedEdgeId) {
+        const edge = state.edges.find(ed => ed.id === state.selectedEdgeId);
+        if (!edge) return;
+
+        const srcNode = state.nodes.find(n => n.id === edge.source);
+        const tgtNode = state.nodes.find(n => n.id === edge.target);
+
+        const colorOptionsHtml = Object.entries(ACCENT_PALETTE).map(([key, val]) => `
+          <button type="button" data-color="${key}"
+            class="edge-color-swatch w-7 h-7 rounded-lg flex items-center justify-center border-2 transition ${edge.color === key ? 'border-white scale-110' : 'border-transparent opacity-75 hover:opacity-100'}"
+            style="background: ${val.hex};">
+            ${edge.color === key ? '<i data-lucide="check" class="w-3.5 h-3.5 text-slate-950 stroke-[3]"></i>' : ''}
+          </button>
+        `).join('');
+
+        inspectorContentEl.innerHTML = `
+          <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="git-commit-horizontal" class="w-4 h-4 text-sky-400"></i>
+              <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">통신 연결선 설정</h2>
+            </div>
+            <button id="btn-close-inspector" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="space-y-4 flex-1">
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs space-y-1.5">
+              <div class="text-slate-400 text-[10px]">출발지 (Source)</div>
+              <div class="font-semibold text-slate-200 truncate">${escapeHtml(srcNode ? srcNode.title : edge.source)}</div>
+              <div class="text-slate-400 text-[10px] pt-1">목적지 (Target)</div>
+              <div class="font-semibold text-slate-200 truncate">${escapeHtml(tgtNode ? tgtNode.title : edge.target)}</div>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">프로토콜 / 통신 라벨</label>
+              <input id="inp-edge-label" type="text" value="${escapeHtml(edge.label || '')}"
+                placeholder="예: HTTPS / gRPC, TCP 8000, Redis Stream"
+                class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-sky-500" />
+              <!-- Quick Protocol Chips -->
+              <div class="flex flex-wrap gap-1.5 mt-2">
+                <button type="button" class="proto-chip text-[10px] font-mono px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800">HTTPS / gRPC</button>
+                <button type="button" class="proto-chip text-[10px] font-mono px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800">OpenAI API :8000</button>
+                <button type="button" class="proto-chip text-[10px] font-mono px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800">East-West mTLS</button>
+                <button type="button" class="proto-chip text-[10px] font-mono px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800">Redis Stream</button>
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1.5">연결선 색상</label>
+              <div class="flex items-center gap-2 pt-0.5">${colorOptionsHtml}</div>
+            </div>
+
+            <div class="space-y-2 pt-1">
+              <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 cursor-pointer">
+                <span class="text-xs text-slate-300">점선 스타일 (비동기/논리 통신)</span>
+                <input id="chk-edge-dashed" type="checkbox" ${edge.dashed ? 'checked' : ''} class="accent-sky-500 w-4 h-4" />
+              </label>
+
+              <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 cursor-pointer">
+                <span class="text-xs text-slate-300">양방향 통신 화살표</span>
+                <input id="chk-edge-bidir" type="checkbox" ${edge.bidir ? 'checked' : ''} class="accent-sky-500 w-4 h-4" />
+              </label>
+
+              <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800 cursor-pointer">
+                <span class="text-xs text-slate-300">트래픽 흐름 애니메이션</span>
+                <input id="chk-edge-anim" type="checkbox" ${edge.animated !== false ? 'checked' : ''} class="accent-sky-500 w-4 h-4" />
+              </label>
+            </div>
+          </div>
+
+          <div class="pt-4 mt-4 border-t border-slate-800">
+            <button id="btn-del-edge" class="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 transition">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span>연결선 삭제</span>
+            </button>
+          </div>
+        `;
+
+        document.getElementById('btn-close-inspector').onclick = deselectAll;
+
+        document.getElementById('inp-edge-label').addEventListener('input', (e) => {
+          edge.label = e.target.value;
+          renderEdges();
+        });
+        document.getElementById('inp-edge-label').addEventListener('change', pushHistory);
+
+        inspectorContentEl.querySelectorAll('.proto-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            edge.label = chip.textContent;
+            document.getElementById('inp-edge-label').value = edge.label;
+            pushHistory();
+            renderEdges();
+          });
+        });
+
+        inspectorContentEl.querySelectorAll('.edge-color-swatch').forEach(btn => {
+          btn.addEventListener('click', () => {
+            edge.color = btn.dataset.color;
+            pushHistory();
+            renderAll();
+          });
+        });
+
+        document.getElementById('chk-edge-dashed').addEventListener('change', (e) => {
+          edge.dashed = e.target.checked;
+          pushHistory();
+          renderEdges();
+        });
+
+        document.getElementById('chk-edge-bidir').addEventListener('change', (e) => {
+          edge.bidir = e.target.checked;
+          pushHistory();
+          renderEdges();
+        });
+
+        document.getElementById('chk-edge-anim').addEventListener('change', (e) => {
+          edge.animated = e.target.checked;
+          pushHistory();
+          renderEdges();
+        });
+
+        document.getElementById('btn-del-edge').addEventListener('click', deleteSelected);
+
+        lucide.createIcons();
+        return;
+      }
+
+      // Case 3: Nothing Selected -> Architecture Overview & Guide
+      const totalNodes = state.nodes.filter(n => !n.isZone).length;
+      const totalZones = state.nodes.filter(n => n.isZone).length;
+      const totalEdges = state.edges.length;
+
+      inspectorContentEl.innerHTML = `
+        <div class="pb-3 mb-4 border-b border-slate-800">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-2">
+            <i data-lucide="info" class="w-4 h-4 text-sky-400"></i>
+            <span>아키텍처 요약 &amp; 가이드</span>
+          </h2>
+        </div>
+
+        <div class="space-y-4 text-xs">
+          <!-- Stats Cards -->
+          <div class="grid grid-cols-3 gap-2">
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 text-center">
+              <div class="text-lg font-bold font-mono text-sky-400">${totalNodes}</div>
+              <div class="text-[10px] text-slate-400 mt-0.5">서버/노드</div>
+            </div>
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 text-center">
+              <div class="text-lg font-bold font-mono text-emerald-400">${totalEdges}</div>
+              <div class="text-[10px] text-slate-400 mt-0.5">통신 연결</div>
+            </div>
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 text-center">
+              <div class="text-lg font-bold font-mono text-purple-400">${totalZones}</div>
+              <div class="text-[10px] text-slate-400 mt-0.5">보안 영역</div>
+            </div>
+          </div>
+
+          <!-- RTX 3070 Design Note -->
+          <div class="p-3.5 rounded-2xl bg-gradient-to-br from-sky-500/10 to-indigo-500/10 border border-sky-500/25 space-y-2">
+            <div class="flex items-center gap-2 font-semibold text-sky-300">
+              <i data-lucide="cpu" class="w-4 h-4"></i>
+              <span>RTX 3070 (8GB) 설계 포인트</span>
+            </div>
+            <p class="text-[11px] text-slate-300 leading-relaxed">
+              8GB VRAM 환경에서는 <strong>4-bit 양자화(AWQ/GPTQ)</strong> 모델을 vLLM으로 구동하고, 앞단에 <strong>Message Queue(Redis/MQ)</strong>를 배치해 트래픽 급증 시 GPU 병목을 방지하는 구조가 이상적입니다.
+            </p>
+          </div>
+
+          <!-- How-to Guide -->
+          <div class="space-y-2.5 pt-1">
+            <div class="text-[11px] font-semibold text-slate-300">사용 방법</div>
+            <div class="flex items-start gap-2.5 text-[11px] text-slate-400">
+              <span class="w-5 h-5 rounded-md bg-slate-800 text-slate-200 flex items-center justify-center font-mono text-[10px] shrink-0">1</span>
+              <span>좌측 패널에서 <strong>에이전트, 대상 서버, vLLM 노드</strong>를 캔버스로 드래그하거나 클릭해 추가합니다.</span>
+            </div>
+            <div class="flex items-start gap-2.5 text-[11px] text-slate-400">
+              <span class="w-5 h-5 rounded-md bg-slate-800 text-slate-200 flex items-center justify-center font-mono text-[10px] shrink-0">2</span>
+              <span>노드 위 마우스를 올리면 나타나는 <strong>4방향 포트(원형 핸들)</strong>를 드래그해 다른 노드에 연결합니다.</span>
+            </div>
+            <div class="flex items-start gap-2.5 text-[11px] text-slate-400">
+              <span class="w-5 h-5 rounded-md bg-slate-800 text-slate-200 flex items-center justify-center font-mono text-[10px] shrink-0">3</span>
+              <span>노드나 연결선을 클릭하면 이곳에서 <strong>이름, 프로토콜, 태그, 색상</strong>을 수정할 수 있습니다.</span>
+            </div>
+            <div class="flex items-start gap-2.5 text-[11px] text-slate-400">
+              <span class="w-5 h-5 rounded-md bg-slate-800 text-slate-200 flex items-center justify-center font-mono text-[10px] shrink-0">4</span>
+              <span>완성된 구성도는 우측 상단에서 <strong>JSON 파일</strong> 또는 <strong>고화질 PNG 이미지</strong>로 저장할 수 있습니다.</span>
+            </div>
+          </div>
+        </div>
+      `;
+
+      lucide.createIcons();
+    }
+
+    function deleteSelected() {
+      if (state.selectedNodeId) {
+        const id = state.selectedNodeId;
+        state.nodes = state.nodes.filter(n => n.id !== id);
+        state.edges = state.edges.filter(e => e.source !== id && e.target !== id);
+        state.selectedNodeId = null;
+        pushHistory();
+        renderAll();
+        showToast('노드가 삭제되었습니다');
+      } else if (state.selectedEdgeId) {
+        const id = state.selectedEdgeId;
+        state.edges = state.edges.filter(e => e.id !== id);
+        state.selectedEdgeId = null;
+        pushHistory();
+        renderAll();
+        showToast('연결선이 삭제되었습니다');
+      }
+    }
+
+    // =========================================================================
+    // 10. MAIN RENDER & PNG EXPORT
+    // =========================================================================
+    function renderAll() {
+      renderNodes();
+      renderEdges();
+      renderInspector();
+      applyViewportTransform();
+    }
+
+    function loadPreset(presetKey) {
+      const data = getPresetData(presetKey);
+      state.nodes = data.nodes;
+      state.edges = data.edges;
+      state.viewport = { ...data.viewport };
+      state.selectedNodeId = null;
+      state.selectedEdgeId = null;
+      state.history = [];
+      state.historyIndex = -1;
+      pushHistory();
+      renderAll();
+    }
+
+    // Clean High-Resolution PNG Renderer via Offscreen HTML5 Canvas
+    function exportDiagramToPNG() {
+      if (state.nodes.length === 0) {
+        showToast('내보낼 노드가 없습니다');
+        return;
+      }
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      state.nodes.forEach(n => {
+        const { width, height } = getNodeDimensions(n);
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + width);
+        maxY = Math.max(maxY, n.y + height);
+      });
+
+      const pad = 60;
+      const width = Math.max(800, maxX - minX + pad * 2);
+      const height = Math.max(500, maxY - minY + pad * 2);
+      const dpr = 2;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      // Background
+      ctx.fillStyle = '#070b14';
+      ctx.fillRect(0, 0, width, height);
+
+      // Subtle Dot Grid
+      ctx.fillStyle = '#1e293b';
+      for (let gx = 0; gx < width; gx += 24) {
+        for (let gy = 0; gy < height; gy += 24) {
+          ctx.beginPath();
+          ctx.arc(gx, gy, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      const ox = -minX + pad;
+      const oy = -minY + pad;
+
+      // 1. Draw Zones
+      state.nodes.filter(n => n.isZone).forEach(z => {
+        const acc = ACCENT_PALETTE[z.accent] || ACCENT_PALETTE.slate;
+        const zw = z.width || 320;
+        const zh = z.height || 260;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+        ctx.strokeStyle = acc.hex;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        roundRect(ctx, z.x + ox, z.y + oy, zw, zh, 16);
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 13px "Noto Sans KR", Inter, sans-serif';
+        ctx.fillText(z.title, z.x + ox + 14, z.y + oy + 24);
+
+        if (z.subtitle) {
+          ctx.fillStyle = '#94a3b8';
+          ctx.font = '11px "Noto Sans KR", Inter, sans-serif';
+          ctx.fillText(z.subtitle, z.x + ox + 14, z.y + oy + 40);
+        }
+        ctx.restore();
+      });
+
+      // 2. Draw Edges
+      state.edges.forEach(edge => {
+        const src = state.nodes.find(n => n.id === edge.source);
+        const tgt = state.nodes.find(n => n.id === edge.target);
+        if (!src || !tgt) return;
+
+        const p1 = getPortCoords(src, edge.sourcePort);
+        const p2 = getPortCoords(tgt, edge.targetPort);
+        const x1 = p1.x + ox, y1 = p1.y + oy;
+        const x2 = p2.x + ox, y2 = p2.y + oy;
+
+        const dist = Math.hypot(x2 - x1, y2 - y1);
+        const offset = Math.min(Math.max(dist * 0.42, 45), 160);
+        const dirVec = {
+          top: { x: 0, y: -offset }, bottom: { x: 0, y: offset },
+          left: { x: -offset, y: 0 }, right: { x: offset, y: 0 }
+        };
+        const v1 = dirVec[edge.sourcePort] || { x: 0, y: 0 };
+        const v2 = dirVec[edge.targetPort] || { x: 0, y: 0 };
+        const cp1x = x1 + v1.x, cp1y = y1 + v1.y;
+        const cp2x = x2 + v2.x, cp2y = y2 + v2.y;
+
+        const acc = ACCENT_PALETTE[edge.color] || ACCENT_PALETTE.sky;
+        ctx.save();
+        ctx.strokeStyle = acc.hex;
+        ctx.lineWidth = 2.2;
+        if (edge.dashed) ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x2, y2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Arrowhead at target
+        const angle = Math.atan2(y2 - cp2y, x2 - cp2x);
+        ctx.fillStyle = acc.hex;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - 10 * Math.cos(angle - Math.PI / 6), y2 - 10 * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - 10 * Math.cos(angle + Math.PI / 6), y2 - 10 * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+
+        // Label Pill
+        if (edge.label) {
+          const midX = 0.125 * x1 + 0.375 * cp1x + 0.375 * cp2x + 0.125 * x2;
+          const midY = 0.125 * y1 + 0.375 * cp1y + 0.375 * cp2y + 0.125 * y2;
+          ctx.font = '500 10px "JetBrains Mono", monospace';
+          const tw = ctx.measureText(edge.label).width + 16;
+          ctx.fillStyle = '#0f172a';
+          ctx.strokeStyle = acc.hex;
+          ctx.lineWidth = 1;
+          roundRect(ctx, midX - tw / 2, midY - 10, tw, 20, 10);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#f1f5f9';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(edge.label, midX, midY);
+        }
+        ctx.restore();
+      });
+
+      // 3. Draw Standard Nodes
+      state.nodes.filter(n => !n.isZone).forEach(n => {
+        const { width: nw, height: nh } = getNodeDimensions(n);
+        const nx = n.x + ox;
+        const ny = n.y + oy;
+        const acc = ACCENT_PALETTE[n.accent] || ACCENT_PALETTE.sky;
+
+        ctx.save();
+        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1.5;
+        roundRect(ctx, nx, ny, nw, nh, 14);
+        ctx.fill();
+        ctx.stroke();
+
+        // Top Accent Strip
+        ctx.fillStyle = acc.hex;
+        roundRect(ctx, nx + 1, ny + 1, nw - 2, 4, 3);
+        ctx.fill();
+
+        // Title & Subtitle
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 13px "Noto Sans KR", Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(n.title, nx + 14, ny + 30);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '11px "Noto Sans KR", Inter, sans-serif';
+        ctx.fillText(n.subtitle || '', nx + 14, ny + 48);
+
+        // Tags
+        let tx = nx + 14;
+        const ty = ny + 74;
+        ctx.font = '10px "JetBrains Mono", monospace';
+        (n.tags || []).slice(0, 3).forEach(tag => {
+          const tagW = ctx.measureText(tag).width + 12;
+          if (tx + tagW < nx + nw - 10) {
+            ctx.fillStyle = '#1e293b';
+            roundRect(ctx, tx, ty, tagW, 20, 6);
+            ctx.fill();
+            ctx.fillStyle = '#cbd5e1';
+            ctx.fillText(tag, tx + 6, ty + 14);
+            tx += tagW + 6;
+          }
+        });
+        ctx.restore();
+      });
+
+      // Watermark
+      ctx.fillStyle = '#475569';
+      ctx.font = '11px "JetBrains Mono", monospace';
+      ctx.fillText('Designed to Scale — Local vLLM & Server Telemetry Studio', 20, height - 18);
+
+      const link = document.createElement('a');
+      link.download = `architecture-diagram-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      showToast('PNG 이미지로 저장되었습니다');
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    // =========================================================================
+    // 11. TOOLBAR & KEYBOARD SHORTCUTS
+    // =========================================================================
+    document.getElementById('palette-search').addEventListener('input', (e) => {
+      renderPalette(e.target.value);
+    });
+
+    document.getElementById('preset-select').addEventListener('change', (e) => {
+      loadPreset(e.target.value);
+      setTimeout(fitViewToContent, 50);
+      showToast('구성도 템플릿이 적용되었습니다');
+    });
+
+    document.getElementById('btn-undo').addEventListener('click', undo);
+    document.getElementById('btn-redo').addEventListener('click', redo);
+
+    document.getElementById('btn-snap').addEventListener('click', (e) => {
+      state.snapToGrid = !state.snapToGrid;
+      const btn = e.currentTarget;
+      btn.className = state.snapToGrid
+        ? 'hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30 transition'
+        : 'hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-slate-900 text-slate-400 border border-slate-800 transition';
+      showToast(state.snapToGrid ? '그리드 스냅 켜짐' : '그리드 스냅 꺼짐');
+    });
+
+    document.getElementById('btn-flow').addEventListener('click', (e) => {
+      state.flowAnimated = !state.flowAnimated;
+      const btn = e.currentTarget;
+      btn.className = state.flowAnimated
+        ? 'hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 transition'
+        : 'hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-slate-900 text-slate-400 border border-slate-800 transition';
+      renderEdges();
+      showToast(state.flowAnimated ? '트래픽 흐름 애니메이션 켜짐' : '트래픽 흐름 애니메이션 꺼짐');
+    });
+
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+      state.viewport.scale = Math.min(2.0, state.viewport.scale + 0.12);
+      applyViewportTransform();
+    });
+
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+      state.viewport.scale = Math.max(0.35, state.viewport.scale - 0.12);
+      applyViewportTransform();
+    });
+
+    document.getElementById('btn-fit-view').addEventListener('click', fitViewToContent);
+
+    // Export JSON
+    document.getElementById('btn-export-json').addEventListener('click', () => {
+      const payload = JSON.stringify({
+        version: '1.0',
+        exportedAt: new Date().toISOString(),
+        nodes: state.nodes,
+        edges: state.edges
+      }, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vllm-infra-architecture-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('구성도 JSON 파일이 저장되었습니다');
+    });
+
+    // Import JSON
+    const fileInputEl = document.getElementById('file-import-input');
+    document.getElementById('btn-import-json').addEventListener('click', () => {
+      fileInputEl.click();
+    });
+    fileInputEl.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.target.result);
+          if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
+            state.nodes = parsed.nodes;
+            state.edges = parsed.edges;
+            state.selectedNodeId = null;
+            state.selectedEdgeId = null;
+            pushHistory();
+            renderAll();
+            setTimeout(fitViewToContent, 50);
+            showToast('JSON 구성도를 불러왔습니다');
+          } else {
+            showToast('올바른 구성도 JSON 형식이 아닙니다');
+          }
+        } catch (err) {
+          showToast('JSON 파싱 오류가 발생했습니다');
+        }
+        fileInputEl.value = '';
+      };
+      reader.readAsText(file);
+    });
+
+    // Export PNG
+    document.getElementById('btn-export-png').addEventListener('click', exportDiagramToPNG);
+
+    // Keyboard Shortcuts (Delete, Undo, Redo)
+    window.addEventListener('keydown', (e) => {
+      const tag = document.activeElement.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        deleteSelected();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (e.key === 'Escape') {
+        deselectAll();
+      }
+    });
+
+    // =========================================================================
+    // 12. INITIALIZE APP
+    // =========================================================================
+    window.addEventListener('DOMContentLoaded', () => {
+      renderPalette();
+      loadPreset('rtx3070_default');
+      setTimeout(fitViewToContent, 80);
+    });
+  </script>
+</body>
+</html>
