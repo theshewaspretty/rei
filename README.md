@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-# Infra Scanner
+# Reverse Engineering Infra
 
 **한국어** | [English](README.en.md)
 
@@ -13,7 +12,7 @@
 
 ![데모 데이터로 만든 구성도 (PNG 내보내기, 영어 화면)](docs/topology-demo.png)
 
-*데모 데이터(`demo-seed`)로 만든 구성도를 화면의 "PNG 저장"으로 내보낸 그림입니다.*
+*데모 데이터로 만든 구성도를 화면의 "PNG 저장"으로 내보낸 그림입니다. 같은 구성도를 브라우저에서 직접 돌려 보려면 [GitHub Pages 데모](#github-pages-데모)(`docs/index.html`)를 쓰세요.*
 
 ## 목차
 
@@ -30,6 +29,7 @@
 - [수집하는 정보](#수집하는-정보)
 - [운영](#운영)
 - [소스에서 빌드하고 데모 실행하기](#소스에서-빌드하고-데모-실행하기)
+- [GitHub Pages 데모](#github-pages-데모)
 - [API](#api)
 - [프로젝트 구조](#프로젝트-구조)
 - [알려진 제한과 검증 범위](#알려진-제한과-검증-범위)
@@ -350,6 +350,29 @@ export DATA_DIR=dist/demo-data DOWNLOADS_DIR=dist/downloads
 
 `http://127.0.0.1:8080` 을 엽니다. `TLS_MODE=off` 와 `COOKIE_SECURE=false` 는 자기 PC 에서 시험할 때만 쓰세요.
 
+## GitHub Pages 데모
+
+수집 서버 없이 브라우저만으로 화면을 돌려 볼 수 있는 정적 데모가 `docs/index.html` 입니다. 가상 서버 13대의 구성도·점검·서버 상세가 들어 있고, 실제 관제 화면과 같은 코드로 동작합니다. 서버와 주소는 모두 가상의 값이며, 바꾼 내용(노드 위치 등)은 페이지를 닫으면 사라집니다.
+
+### 로컬에서 열기
+
+```bash
+go run ./cmd/demo-site          # 화면·서버·데모 데이터를 반영해 docs/index.html 을 다시 만듭니다
+# docs/index.html 을 브라우저로 바로 열어도 되고, 간단 웹 서버로 열어도 됩니다
+```
+
+화면이나 점검 로직을 고친 뒤에는 `go run ./cmd/demo-site` 를 다시 실행한 다음 `docs/index.html` 을 함께 커밋하세요. `go test ./cmd/demo-site` 가 파일이 최신인지도 확인합니다.
+
+### GitHub Pages 에 올리기
+
+1. 이 저장소를 GitHub 에 **Public** 으로 올립니다.
+2. 저장소 **Settings → Pages** 로 갑니다.
+3. **Build and deployment → Source** 에서 **Deploy from a branch** 를 고릅니다.
+4. Branch 는 `main`(또는 기본 브랜치), Folder 는 **`/docs`** 로 두고 Save 합니다.
+5. 잠시 뒤 `https://<GitHub사용자명>.github.io/<저장소이름>/` 에서 데모가 열립니다.
+
+Pages 가 켜지면 데모 화면 위쪽에 "소스 보기" 링크가 자동으로 이 저장소를 가리킵니다. 별도 빌드나 Actions 는 필요 없습니다. `docs/index.html` 하나만 있으면 됩니다.
+
 ## API
 
 | 메서드와 경로 | 인증 | 설명 |
@@ -372,14 +395,16 @@ export DATA_DIR=dist/demo-data DOWNLOADS_DIR=dist/downloads
 cmd/
   agent/        infra-agent: 설치, 제거, 실행 명령
   server/       infra-server: 수집 서버
-  demo-seed/    데모 데이터를 보내는 도구
+  demo-seed/    데모 데이터를 실제 수집 서버에 보내는 도구
+  demo-site/    GitHub Pages 용 정적 데모(docs/index.html)를 만드는 도구
 internal/
   agent/        수집(소켓, 호스트 정보), 등록, 전송
+  demo/         시연용 가상 서버 13대 정의
   server/       API, 인증, 저장소(SQLite), 구성도 생성, 점검, TLS
   model/        에이전트와 서버가 주고받는 보고 형식
 web/static/     관제 화면: index.html, app.js, app.css, i18n.js (번역)
 docker/certs/   빌드 때만 쓰는 사내 CA 를 넣는 폴더
-docs/           문서용 그림
+docs/           GitHub Pages 데모(index.html)와 문서용 그림
 Dockerfile, docker-compose.yml, .env.example
 test.html       화면 디자인의 기준이 된 구성도 편집기 (단독으로 열어 쓰는 파일)
 ```
@@ -407,6 +432,3 @@ test.html       화면 디자인의 기준이 된 구성도 편집기 (단독으
 - 에이전트는 **본인이 소유하거나 관리 권한을 가진 서버에만** 설치하세요. 권한 없는 시스템의 정보를 수집하는 것은 대부분의 나라에서 불법입니다.
 
 버그 신고, 기능 제안, 번역 수정, 풀 리퀘스트를 환영합니다.
-=======
-# rei
->>>>>>> 25989fc5bbdf3ceba50dc03f0956ef6194b0659f

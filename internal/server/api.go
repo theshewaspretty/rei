@@ -61,7 +61,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := randomToken(32)
-	rec, err := s.store.EnrollAgent(randomToken(9), req.MachineID, req.Hostname, hashToken(token), time.Now())
+	rec, err := s.store.EnrollAgent(randomToken(9), req.MachineID, req.Hostname, hashToken(token), s.now())
 	if err != nil {
 		s.logger.Printf("에이전트 등록 실패: %v", err)
 		writeError(w, http.StatusInternalServerError, "enroll_failed", "등록을 저장하지 못했습니다")
@@ -97,7 +97,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	flows := collapseInbound(rep.Flows, index)
 	rep.Flows = nil // 흐름은 flows 테이블에 누적하고, 스냅샷에는 넣지 않는다
 
-	now := time.Now()
+	now := s.now()
 	if err := s.store.SaveReport(agent.ID, &rep, flows, clientIP(r), now); err != nil {
 		s.logger.Printf("보고 저장 실패 (%s): %v", agent.ID, err)
 		writeError(w, http.StatusInternalServerError, "report_failed", "보고를 저장하지 못했습니다")

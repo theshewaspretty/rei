@@ -96,10 +96,10 @@ const (
 func (s *Server) topology(window time.Duration) (*Topology, error) {
 	s.topoMu.Lock()
 	defer s.topoMu.Unlock()
-	if c, ok := s.topoCache[window]; ok && time.Since(c.at) < topoCacheTTL {
+	now := s.now()
+	if c, ok := s.topoCache[window]; ok && now.Sub(c.at) < topoCacheTTL {
 		return c.topo, nil
 	}
-	now := time.Now()
 	agents, index := s.snapshot()
 	rows, err := s.store.Flows(now.Add(-window))
 	if err != nil {

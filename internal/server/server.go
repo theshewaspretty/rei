@@ -33,6 +33,10 @@ type Config struct {
 	CookieSecure  bool
 	RetentionDays int
 	DownloadsDir  string
+
+	// Clock 은 보고를 받은 시각과 구성도를 만드는 시각을 정한다. 비워 두면 time.Now 를 쓴다.
+	// 환경 변수로는 정할 수 없고, 정해진 시각으로 같은 결과를 만들어야 하는 곳(cmd/demo-site)에서만 넣는다.
+	Clock func() time.Time
 }
 
 // ConfigFromEnv 는 환경 변수에서 설정을 읽고, 운영에 쓰면 안 되는 값은 거부한다.
@@ -142,6 +146,13 @@ func New(cfg Config, static fs.FS, logger *log.Logger) (*Server, error) {
 }
 
 func (s *Server) Close() error { return s.store.Close() }
+
+func (s *Server) now() time.Time {
+	if s.cfg.Clock != nil {
+		return s.cfg.Clock()
+	}
+	return time.Now()
+}
 
 // PruneLoop 는 보존 기간이 지난 흐름을 하루에 한 번 지운다.
 func (s *Server) PruneLoop(stop <-chan struct{}) {

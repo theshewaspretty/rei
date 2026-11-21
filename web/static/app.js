@@ -1433,7 +1433,8 @@
       el.modalBody.innerHTML = `<div class="form-error">${esc(ex.message)}</div>`;
       return;
     }
-    if (!state.installForm.server) state.installForm.server = location.origin;
+    // 수집 서버 주소의 기본값은 지금 이 화면을 연 주소다. 정적 데모 페이지(cmd/demo-site)만 server_url 로 예시 주소를 준다.
+    if (!state.installForm.server) state.installForm.server = state.installInfo.server_url || location.origin;
     renderInstallForm();
   }
 

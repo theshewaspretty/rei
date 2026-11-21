@@ -8,7 +8,7 @@ A web app that **draws your data-center topology automatically and flags items t
 
 ![Topology built from demo data (PNG export)](docs/topology-demo.png)
 
-*A topology built from demo data (`demo-seed`) and exported with the console's "Save the topology as PNG" button.*
+*A topology built from demo data and exported with the console's "Save the topology as PNG" button. To interact with the same topology in a browser, use the [GitHub Pages demo](#github-pages-demo) (`docs/index.html`).*
 
 ## Contents
 
@@ -25,6 +25,7 @@ A web app that **draws your data-center topology automatically and flags items t
 - [What is collected](#what-is-collected)
 - [Operations](#operations)
 - [Building from source and running the demo](#building-from-source-and-running-the-demo)
+- [GitHub Pages demo](#github-pages-demo)
 - [API](#api)
 - [Project layout](#project-layout)
 - [Known limitations and what has been verified](#known-limitations-and-what-has-been-verified)
@@ -349,6 +350,29 @@ export DATA_DIR=dist/demo-data DOWNLOADS_DIR=dist/downloads
 
 Open `http://127.0.0.1:8080`. Use `TLS_MODE=off` and `COOKIE_SECURE=false` only for testing on your own PC.
 
+## GitHub Pages demo
+
+`docs/index.html` is a static demo that runs in the browser with no collector. It includes the topology, checks and server details for 13 fictional servers, and uses the same console code as the live product. All servers and addresses are fictional; changes such as moved nodes are lost when you close the page.
+
+### Open it locally
+
+```bash
+go run ./cmd/demo-site          # rebuild docs/index.html from the current console, collector and demo data
+# open docs/index.html in a browser, or serve the docs/ folder with any simple web server
+```
+
+After you change the console or the check logic, run `go run ./cmd/demo-site` again and commit `docs/index.html` with the change. `go test ./cmd/demo-site` also checks that the file is up to date.
+
+### Publish on GitHub Pages
+
+1. Push this repository to GitHub as a **Public** repository.
+2. Open the repository **Settings → Pages**.
+3. Under **Build and deployment → Source**, choose **Deploy from a branch**.
+4. Set Branch to `main` (or your default branch) and Folder to **`/docs`**, then Save.
+5. After a short wait the demo is at `https://<GitHub-username>.github.io/<repository-name>/`.
+
+Once Pages is on, the "View source" link at the top of the demo points to this repository automatically. No Actions workflow is required; `docs/index.html` alone is enough.
+
 ## API
 
 | Method and path | Authentication | Description |
@@ -371,14 +395,16 @@ Responses are language-neutral. A check result carries a `code` and `args` inste
 cmd/
   agent/        infra-agent: install, uninstall and run commands
   server/       infra-server: the collector
-  demo-seed/    tool that sends demo data
+  demo-seed/    tool that sends demo data to a live collector
+  demo-site/    tool that builds the static GitHub Pages demo (docs/index.html)
 internal/
   agent/        collection (sockets, host information), enrollment, sending
+  demo/         definition of the 13 fictional servers used for demos
   server/       API, authentication, storage (SQLite), topology building, checks, TLS
   model/        report format exchanged by the agent and the collector
 web/static/     console: index.html, app.js, app.css, i18n.js (translations)
 docker/certs/   place for a corporate CA used only during the build
-docs/           images for the documentation
+docs/           GitHub Pages demo (index.html) and images for the documentation
 Dockerfile, docker-compose.yml, .env.example
 test.html       the topology editor the design is based on (a standalone file)
 ```

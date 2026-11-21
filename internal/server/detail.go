@@ -58,7 +58,7 @@ func (s *Server) hostDetail(agentID string, window time.Duration) (*HostDetail, 
 	if rec == nil {
 		return nil, errNotFound
 	}
-	now := time.Now()
+	now := s.now()
 	d := &HostDetail{
 		ID: rec.ID, NodeID: "a:" + rec.ID, Hostname: rec.Hostname, Status: agentStatus(rec, now),
 		FirstSeen: rec.FirstSeen.UTC(), RemoteAddr: rec.RemoteAddr, WindowSec: int(window / time.Second),
